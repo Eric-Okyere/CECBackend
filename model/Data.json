@@ -1,0 +1,365 @@
+
+
+
+
+
+
+
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "69c797118bf5062a3abb9706",
+      "subject": "RELIGIOUS AND MORAL EDUCATION",
+      "level": "JHS 1",
+      "strand": "GOD, HIS CREATION AND ATTRIBUTES",
+      "subStrand": "GOD, HIS NATURE AND ATTRIBUTES",
+      "videoUrl": "https://res.cloudinary.com/ddhkbhd6k/video/upload/v1774693572/lessons/pvsuvvhsdvounahuglwr.mp4",
+      "quiz": [
+        {
+          "question": "Which attribute of God describes Him as being 'All-Knowing'?",
+          "options": ["Omniscience", "Omnipotence", "Omnipresence", "Eternity"],
+          "answer": "Omniscience",
+          "explanation": "Omniscience refers to God's perfect and total knowledge of everything, including thoughts and future events.",
+          "_id": "69c79f3863c34430164f8349"
+        },
+        {
+          "question": "What does the 'Spirit-nature' of God imply?",
+          "options": [
+            "He has a physical body like humans",
+            "He is invisible and not limited by physical form",
+            "He only exists in the clouds",
+            "He was created by other spirits"
+          ],
+          "answer": "He is invisible and not limited by physical form",
+          "explanation": "Being Spirit means God is non-material, making Him invisible to the physical eye and unlimited by space.",
+          "_id": "69c79f3863c34430164f834a"
+        },
+        {
+          "question": "Which of these is an 'Incommunicable' attribute (belonging to God alone)?",
+          "options": ["Love", "Justice", "Self-existence", "Kindness"],
+          "answer": "Self-existence",
+          "explanation": "Only God is self-existent (Asienye); all other things depend on Him for their existence.",
+          "_id": "69c79f3863c34430164f834b"
+        },
+        {
+          "question": "The Akan name 'Onyame' suggests God is the 'Satisfier of Needs.' This relates to:",
+          "options": ["Providence", "Anger", "Invisibility", "Jealousy"],
+          "answer": "Providence",
+          "explanation": "Providence is God's continuous care and provision for all His creation.",
+          "_id": "69c79f3863c34430164f834c"
+        },
+        {
+          "question": "The attribute of 'Holiness' means that God is:",
+          "options": ["Very old", "Pure and separated from evil", "Friendly to everyone", "A physical king"],
+          "answer": "Pure and separated from evil",
+          "explanation": "Holiness signifies God's absolute moral purity and His separation from everything that is sinful.",
+          "_id": "69c79f3863c34430164f834d"
+        },
+        {
+          "question": "What is the meaning of the attribute 'Immutability'?",
+          "options": [
+            "God is silent",
+            "God does not change in His nature or promises",
+            "God changes His mind often",
+            "God is only found in one place"
+          ],
+          "answer": "God does not change in His nature or promises",
+          "explanation": "Immutability means God's character, will, and attributes remain the same forever.",
+          "_id": "69c79f3863c34430164f834e"
+        },
+        {
+          "question": "On which day of creation did Man appear?",
+          "options": ["Day 4", "Day 5", "Day 6", "Day 7"],
+          "answer": "Day 6",
+          "explanation": "God created land animals and finally Man on the sixth day as the peak of His work.",
+          "_id": "69c79f3863c34430164f834f"
+        },
+        {
+          "question": "God's attribute of 'Sovereignty' means:",
+          "options": [
+            "He is the supreme ruler over all creation",
+            "He is equal to the angels",
+            "He only rules those who believe in Him",
+            "He has retired from ruling"
+          ],
+          "answer": "He is the supreme ruler over all creation",
+          "explanation": "Sovereignty describes God's absolute authority and right to govern the universe.",
+          "_id": "69c79f3863c34430164f8350"
+        },
+        {
+          "question": "When we say God is 'Patient,' we are describing a:",
+          "options": ["Physical attribute", "Moral/Communicable attribute", "Scientific attribute", "Negative attribute"],
+          "answer": "Moral/Communicable attribute",
+          "explanation": "Patience is a moral quality that God possesses and encourages humans to develop.",
+          "_id": "69c79f3863c34430164f8351"
+        },
+        {
+          "question": "The attribute 'Eternity' indicates that God:",
+          "options": [
+            "Is very fast",
+            "Has no beginning and no end",
+            "Will end when the world ends",
+            "Lived for only 1000 years"
+          ],
+          "answer": "Has no beginning and no end",
+          "explanation": "Eternity means God exists outside of time; He was not created and will never cease to exist.",
+          "_id": "69c79f3863c34430164f8352"
+        },
+        {
+          "question": "Which attribute ensures that God will always do what is right and fair?",
+          "options": ["Justice", "Power", "Invisibility", "Unity"],
+          "answer": "Justice",
+          "explanation": "God's justice is His commitment to fairness and upholding moral laws.",
+          "_id": "69c79f3863c34430164f8353"
+        },
+        {
+          "question": "The Ga name for God, 'Nyonmo', is often associated with:",
+          "options": ["The Earth and Soil", "Rain and the Heavens", "The Ocean only", "Human kings"],
+          "answer": "Rain and the Heavens",
+          "explanation": "In Ga traditional thought, 'Nyonmo' is linked to the sky and the rain that sustains life.",
+          "_id": "69c79f3863c34430164f8354"
+        },
+        {
+          "question": "What is the primary purpose of 'Creation' according to RME?",
+          "options": [
+            "To show God's glory and provide for Man",
+            "To make God feel less lonely",
+            "To hide God from humans",
+            "To create a place for war"
+          ],
+          "answer": "To show God's glory and provide for Man",
+          "explanation": "Creation reveals God's attributes and provides a home and resources for human life.",
+          "_id": "69c79f3863c34430164f8355"
+        },
+        {
+          "question": "God is called 'Omnipotent' because He created the world through:",
+          "options": ["Hard physical labor", "His spoken Word", "The help of humans", "Scientific experiments"],
+          "answer": "His spoken Word",
+          "explanation": "God's power is so great that He simply spoke ('Let there be...') and things came into existence.",
+          "_id": "69c79f3863c34430164f8356"
+        },
+        {
+          "question": "Which of these is NOT an attribute of God?",
+          "options": ["Mercy", "Forgetfulness", "Faithfulness", "Truth"],
+          "answer": "Forgetfulness",
+          "explanation": "God is omniscient; He never forgets or makes mistakes in His knowledge.",
+          "_id": "69c79f3863c34430164f8357"
+        },
+        {
+          "question": "In the Ewe language, God is called 'Mawu'. This often means:",
+          "options": ["The Unsurpassable One", "The Smallest Spirit", "The God of the Sea", "The Sun"],
+          "answer": "The Unsurpassable One",
+          "explanation": "Mawu suggests that there is no one greater than or beyond God.",
+          "_id": "69c79f3863c34430164f8358"
+        },
+        {
+          "question": "The attribute 'Mercy' is best shown when God:",
+          "options": [
+            "Punishes people immediately",
+            "Forgives those who go wrong",
+            "Creates new planets",
+            "Stays invisible"
+          ],
+          "answer": "Forgives those who go wrong",
+          "explanation": "Mercy is the compassionate treatment of those who are in distress or who have sinned.",
+          "_id": "69c79f3863c34430164f8359"
+        },
+        {
+          "question": "Which phrase describes the 'Omnipresence' of God?",
+          "options": [
+            "God is only in the church building",
+            "There is no place where God is not",
+            "God is hiding in a secret room",
+            "God is only inside people"
+          ],
+          "answer": "There is no place where God is not",
+          "explanation": "Omnipresence means God is fully present in all parts of the universe at all times.",
+          "_id": "69c79f3863c34430164f835a"
+        },
+        {
+          "question": "Why is 'Stewardship' a duty for humans?",
+          "options": [
+            "To earn money from the land",
+            "Because God gave humans the responsibility to care for creation",
+            "Because humans created the trees",
+            "To destroy the earth"
+          ],
+          "answer": "Because God gave humans the responsibility to care for creation",
+          "explanation": "Stewardship is managing and protecting the environment as God's representatives.",
+          "_id": "69c79f3863c34430164f835b"
+        },
+        {
+          "question": "God's attribute of 'Wisdom' is seen in creation through:",
+          "options": [
+            "The chaotic way things happen",
+            "The perfect order and balance in nature",
+            "The fact that nothing works correctly",
+            "God guessing what to create next"
+          ],
+          "answer": "The perfect order and balance in nature",
+          "explanation": "The way planets rotate, seasons change, and bodies work shows God's infinite wisdom.",
+          "_id": "69c79f3863c34430164f835c"
+        }
+      ],
+      "createdAt": "2026-03-28T08:53:37.900Z",
+      "updatedAt": "2026-03-28T10:26:13.539Z",
+      "__v": 0,
+      "videos": []
+    },
+    {
+      "_id": "69c6152a8697824ea1cabd78",
+      "subject": "Mathematics",
+      "level": "JHS 1",
+      "strand": "Strand 1: Number",
+      "subStrand": "Sub-strand 1: Number and Numeration Systems",
+      "videoUrl": "https://res.cloudinary.com/ddhkbhd6k/video/upload/v1774589225/aaipvl7ppsv3uwd8t1yx.mp4",
+      "quiz": [
+        {
+          "question": "What is the place value of 5 in 354?",
+          "options": ["5", "50", "5 tens ", "500"],
+          "answer": "50",
+          "explanation": "5 is in the tens place, so its value is 50.",
+          "_id": "69c6152a8697824ea1cabd79"
+        },
+        {
+          "question": "Which is the largest number?",
+          "options": ["435", "543", "345", "534"],
+          "answer": "543",
+          "explanation": "543 is larger than 435, 345, and 534.",
+          "_id": "69c6152a8697824ea1cabd7a"
+        },
+        {
+          "question": "What is the smallest 3-digit number?",
+          "options": ["100", "101", "99", "110"],
+          "answer": "100",
+          "explanation": "100 is the smallest 3-digit number.",
+          "_id": "69c6152a8697824ea1cabd7b"
+        },
+        {
+          "question": "Convert 300 into hundreds and tens",
+          "options": ["3 hundreds 0 tens", "30 hundreds 0 tens", "3 tens 0 hundreds", "300 hundreds 0 tens"],
+          "answer": "3 hundreds 0 tens",
+          "explanation": "300 has 3 hundreds and 0 tens.",
+          "_id": "69c6152a8697824ea1cabd7c"
+        },
+        {
+          "question": "Which number comes next: 12, 22, 32, ?",
+          "options": ["42", "33", "52", "40"],
+          "answer": "42",
+          "explanation": "The pattern increases by 10 each time.",
+          "_id": "69c6152a8697824ea1cabd7d"
+        },
+        {
+          "question": "How many ones in 1,234?",
+          "options": ["4", "3", "2", "1"],
+          "answer": "4",
+          "explanation": "The ones place is 4",
+          "_id": "69c6152a8697824ea1cabd7e"
+        },
+        {
+          "question": "What is 7 in the tens place worth?",
+          "options": ["7", "70", "700", "0.7"],
+          "answer": "70",
+          "explanation": "7 in the tens place is 70.",
+          "_id": "69c6152a8697824ea1cabd7f"
+        },
+        {
+          "question": "Which is an even number?",
+          "options": ["135", "246", "357", "579"],
+          "answer": "246",
+          "explanation": "246 ends in 6, an even number.",
+          "_id": "69c6152a8697824ea1cabd80"
+        },
+        {
+          "question": "Write 1,056 in expanded form",
+          "options": ["1000 + 50 + 6", "1000 + 50 + 6 + 0", "1000 + 50 + 6 + 10", "100 + 0 + 50 + 6"],
+          "answer": "1000 + 50 + 6",
+          "explanation": "1,056 = 1000 + 50 + 6.",
+          "_id": "69c6152a8697824ea1cabd81"
+        },
+        {
+          "question": "Round 467 to the nearest ten",
+          "options": ["470", "460", "400", "500"],
+          "answer": "470",
+          "explanation": "467 rounds to 470.",
+          "_id": "69c6152a8697824ea1cabd82"
+        },
+        {
+          "question": "What is the digit in the hundreds place in 3,582?",
+          "options": ["5", "3", "8", "2"],
+          "answer": "5",
+          "explanation": "The hundreds digit is 5.",
+          "_id": "69c6152a8697824ea1cabd83"
+        },
+        {
+          "question": "Convert 0.75 to fraction",
+          "options": ["3/4", "7/5", "1/2", "2/1"],
+          "answer": "3/4",
+          "explanation": "0.75 = 3/4.",
+          "_id": "69c6152a8697824ea1cabd84"
+        },
+        {
+          "question": "Write 600 in words",
+          "options": ["Six hundred", "Six thousand", "Six hundred and six", "Six"],
+          "answer": "Six hundred",
+          "explanation": "600 in words is Six hundred.",
+          "_id": "69c6152a8697824ea1cabd85"
+        },
+        {
+          "question": "Which number is divisible by 5?",
+          "options": ["120", "123", "127", "132"],
+          "answer": "120",
+          "explanation": "120 ends with 0, divisible by 5.",
+          "_id": "69c6152a8697824ea1cabd86"
+        },
+        {
+          "question": "What is 9 tens plus 4 ones?",
+          "options": ["94", "90", "14", "100"],
+          "answer": "94",
+          "explanation": "9 tens = 90, plus 4 = 94.",
+          "_id": "69c6152a8697824ea1cabd87"
+        },
+        {
+          "question": "Find the sum: 345 + 212",
+          "options": ["557", "555", "547", "5570"],
+          "answer": "557",
+          "explanation": "345 + 212 = 557.",
+          "_id": "69c6152a8697824ea1cabd88"
+        },
+        {
+          "question": "Which is a 4-digit number?",
+          "options": ["3456", "456", "5678", "Both A and C"],
+          "answer": "Both A and C",
+          "explanation": "3456 and 5678 are 4-digit numbers.",
+          "_id": "69c6152a8697824ea1cabd89"
+        },
+        {
+          "question": "Write 0.5 as a fraction",
+          "options": ["1/2", "5/10", "2/1", "1/5"],
+          "answer": "1/2",
+          "explanation": "0.5 = 1/2.",
+          "_id": "69c6152a8697824ea1cabd8a"
+        },
+        {
+          "question": "Which number is odd?",
+          "options": ["24", "35", "68", "12"],
+          "answer": "35",
+          "explanation": "35 is odd.",
+          "_id": "69c6152a8697824ea1cabd8b"
+        },
+        {
+          "question": "What is 2 hundreds + 3 tens + 4 ones?",
+          "options": ["234", "243", "324", "342"],
+          "answer": "234",
+          "explanation": "2 hundreds + 3 tens + 4 ones = 234.",
+          "_id": "69c6152a8697824ea1cabd8c"
+        }
+      ],
+      "createdAt": "2026-03-27T05:27:06.225Z",
+      "updatedAt": "2026-03-27T06:11:34.456Z",
+      "__v": 0,
+      "videos": []
+    }
+  ]
+}
