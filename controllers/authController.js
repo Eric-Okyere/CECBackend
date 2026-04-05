@@ -40,6 +40,28 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
+// --- GET SINGLE USER BY ID ---
+export const getUserById = async (req, res) => {
+  try {
+    const { id } = req.params; // Expects ID in the URL: /api/auth/user/:id
+
+    // Find user, but remove the password from the response for security
+    const user = await User.findById(id).select("-password");
+
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+
+    res.status(200).json(user);
+  } catch (error) {
+    // If the ID format is invalid (e.g., too short), Mongoose throws a CastError
+    if (error.kind === "ObjectId") {
+      return res.status(400).json({ msg: "Invalid User ID format" });
+    }
+    res.status(500).json({ msg: "Server error while fetching user profile." });
+  }
+};
+
 export const updateProfile = async (req, res) => {
   try {
     const { id } = req.params;
