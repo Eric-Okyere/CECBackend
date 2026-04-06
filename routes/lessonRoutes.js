@@ -13,7 +13,7 @@ const router = express.Router();
 
 /**
  * @route   GET /api/lessons
- * @desc    Get all lessons with optional filters (?subject=Math)
+ * @desc    
  */
 router.get("/", getLessons);
 
