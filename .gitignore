@@ -1,0 +1,14 @@
+# Secrets & Credentials
+.env
+.env.local
+
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Files
+.DS_Store
