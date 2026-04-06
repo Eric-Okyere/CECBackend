@@ -8,12 +8,17 @@ const userSchema = new mongoose.Schema(
     email: { type: String, unique: true, required: true },
     password: { type: String, required: true },
     admin: { type: Boolean, default: false },
+    picture: { type: String, default: "" }, 
+    googleId: { type: String, unique: true, sparse: true },
     role: { 
       type: String, 
       enum: ["student", "parent_managed"], 
       default: "student" 
     },
-
+// Add these inside your userSchema
+    isVerified: { type: Boolean, default: false },
+    verificationCode: { type: String },
+    verificationExpires: { type: Date },
     // Student / Child Details
     studentProfile: {
       firstName: { type: String, default: "" }, // 👈 Added
