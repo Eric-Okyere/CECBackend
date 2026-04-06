@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 
+
 import authRoutes from "./routes/authRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import progressRoutes from "./routes/progressRoutes.js";
@@ -48,11 +49,14 @@ app.use("/api/progress", progressRoutes);
 app.use("/api/subjects", subjectRoutes);
 
 // DB
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.log("❌ DB Error:", err.message));
+if (!process.env.MONGO_URI) {
+    console.error("FATAL ERROR: MONGO_URI is not defined.");
+    process.exit(1);
+}
 
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("Connected to DB"))
+  .catch(err => console.error("DB Connection Error:", err));
 // SERVER
 app.listen(5001, () =>
   console.log("🚀 Server running on http://localhost:5001")
