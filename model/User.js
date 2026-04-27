@@ -2,41 +2,50 @@ import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
-    // Parent / Account Owner (From Signup)
-    name: { type: String, required: true },
+    // Identity
+    name: { type: String, required: true }, // For Parent or Independent Learner
     surname: { type: String, required: true },
-    email: { type: String, unique: true, required: true },
+    email: { type: String, unique: true, sparse: true, default: undefined },
+    googleId: { type: String, unique: true, sparse: true, default: undefined },
     password: { type: String, required: true },
+    picture: { type: String, default: "" },
     admin: { type: Boolean, default: false },
-    picture: { type: String, default: "" }, 
-    googleId: { type: String, unique: true, sparse: true },
+    
+    // Roles: 'learner' (solo), 'parent' (manager), 'child' (managed)
     role: { 
       type: String, 
-      enum: ["student", "parent_managed"], 
-      default: "student" 
-    },
-// Add these inside your userSchema
-    isVerified: { type: Boolean, default: false },
-    verificationCode: { type: String },
-    verificationExpires: { type: Date },
-    // Student / Child Details
-    studentProfile: {
-      firstName: { type: String, default: "" }, // 👈 Added
-      lastName: { type: String, default: "" },  // 👈 Added
-      age: { type: Number },
-      level: { type: String, default: "" }, 
+      enum: ["learner", "parent", "child"], 
+      default: "learner" 
     },
 
-    // Parental Context
+    // Relationship Logic
+    parentId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+    // Learning Data (Used by Learners and Children)
+    learningProfile: {
+      level: { type: String, default: "" },
+      age: { type: Number },
+      xp: { type: Number, default: 0 },
+      streak: { type: Number, default: 0 },
+      isPaid: { type: Boolean, default: false }, // Pay later logic
+    },
+    acceptedTerms: {
+  type: Boolean,
+  default: false
+},acceptedTermsAt: {
+  type: Date,
+},
+
+    // Metadata for Parents
     parentDetails: {
       phoneNumber: { type: String, default: "" },
       relationship: { type: String, default: "" }, 
     },
-
-    xp: { type: Number, default: 0 },
-    streak: { type: Number, default: 0 },
+    
+    isVerified: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  { timestamps: true },
+  
 );
 
 export default mongoose.model("User", userSchema);

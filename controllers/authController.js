@@ -1,14 +1,59 @@
 import { OAuth2Client } from "google-auth-library";
-import User from "../model/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { sendVerificationEmail } from "../services/emailService.js";
+import User from "../model/User.js";
 
 
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 
+
+// export const googleLogin = async (req, res) => {
+//   const { token } = req.body;
+
+//   try {
+//     const ticket = await client.verifyIdToken({
+//       idToken: token,
+//       audience: process.env.GOOGLE_CLIENT_ID,
+//     });
+
+//     const { name, family_name, email, sub, picture } = ticket.getPayload();
+
+//     let user = await User.findOne({ email });
+
+//     if (!user) {
+//       // Create new user with Google Picture
+//       user = await User.create({
+//         name: name || "Google User",
+//         surname: family_name || "",
+//         email,
+//         googleId: sub,
+//         picture: picture, // 👈 SAVING THE URL HERE
+//         isVerified: true, 
+//         password: await bcrypt.hash(Math.random().toString(36), 10), 
+//       });
+//     } else {
+//       // 👈 UPDATE PICTURE FOR EXISTING USER
+//       // This ensures if they change their Google photo, it updates in your app too
+//       user.picture = picture;
+//       user.googleId = sub; // Ensure googleId is linked if it wasn't before
+//       await user.save();
+//     }
+
+//     const appToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+//     // Send the full user object back so the frontend can save the picture to localStorage
+//     res.status(200).json({ token: appToken, user });
+//   } catch (error) {
+//     console.error("Google Auth Error:", error);
+//     res.status(400).json({ msg: "Google authentication failed" });
+//   }
+// };
+
+
+// authController.js
 
 export const googleLogin = async (req, res) => {
   const { token } = req.body;
@@ -30,35 +75,110 @@ export const googleLogin = async (req, res) => {
         surname: family_name || "",
         email,
         googleId: sub,
-        picture: picture, // 👈 SAVING THE URL HERE
+        picture: picture,
         isVerified: true, 
+        role: "learner", // 👈 EXPLICITLY SETTING VALID ENUM ROLE
         password: await bcrypt.hash(Math.random().toString(36), 10), 
       });
     } else {
-      // 👈 UPDATE PICTURE FOR EXISTING USER
-      // This ensures if they change their Google photo, it updates in your app too
+      // UPDATE PICTURE FOR EXISTING USER
       user.picture = picture;
-      user.googleId = sub; // Ensure googleId is linked if it wasn't before
+      user.googleId = sub; 
       await user.save();
     }
 
     const appToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-    // Send the full user object back so the frontend can save the picture to localStorage
     res.status(200).json({ token: appToken, user });
   } catch (error) {
     console.error("Google Auth Error:", error);
+    // Checking if the error is specifically a Validation Error to give better feedback
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ msg: "Database validation failed. Check role settings." });
+    }
     res.status(400).json({ msg: "Google authentication failed" });
   }
 };
 
 
 
+
+
+export const addChild = async (req, res) => {
+  try {
+    const { parentId, firstName, lastName, age, level } = req.body;
+
+    // 1. Double check the parent exists
+    const parent = await User.findById(parentId);
+    if (!parent) return res.status(404).json({ msg: "Parent not found" });
+
+    const newChild = await User.create({
+      name: firstName,
+      surname: lastName,
+      email: undefined,      // 👈 Forces Mongoose to treat this as non-existent for the sparse index
+      role: "child",
+      parentId: parentId,
+      isVerified: true,
+      password: await bcrypt.hash(Math.random().toString(36), 10), 
+      learningProfile: {
+        age: Number(age),
+        level,
+        xp: 0,
+        isPaid: false 
+      }
+    });
+
+    res.status(201).json(newChild);
+  } catch (error) {
+    console.error("Add Child Error:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        msg: "Index Conflict. Please ask Admin to drop the 'email_1' index in MongoDB." 
+      });
+    }
+    res.status(500).json({ msg: "Error creating child profile" });
+  }
+};
+
+
+// export const register = async (req, res) => {
+//   try {
+//     const { name, surname, email, password } = req.body;
+    
+//     // Check if user already exists
+//     const existingUser = await User.findOne({ email });
+//     if (existingUser) return res.status(400).json({ msg: "Email already registered." });
+
+//     const vCode = Math.floor(100000 + Math.random() * 900000).toString();
+//     const hashed = await bcrypt.hash(password.toString(), 10);
+
+//     const user = await User.create({ 
+//       name, 
+//       surname, 
+//       email, 
+//       password: hashed,
+//       verificationCode: vCode,
+//       verificationExpires: Date.now() + 10 * 60 * 1000
+//     });
+
+//     // Try sending email
+//     try {
+//       await sendVerificationEmail(email, vCode);
+//       res.status(201).json({ msg: "Verification code sent to email." });
+//     } catch (mailError) {
+//       console.error("Mail Auth Error:", mailError.message);
+//       res.status(500).json({ msg: "Account created, but failed to send email. Check SMTP credentials." });
+//     }
+
+//   } catch (error) {
+//     res.status(500).json({ msg: error.message });
+//   }
+// };
+
 export const register = async (req, res) => {
   try {
     const { name, surname, email, password } = req.body;
     
-    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) return res.status(400).json({ msg: "Email already registered." });
 
@@ -70,25 +190,21 @@ export const register = async (req, res) => {
       surname, 
       email, 
       password: hashed,
+      role: "learner", // 👈 ADD THIS EXPLICITLY
       verificationCode: vCode,
       verificationExpires: Date.now() + 10 * 60 * 1000
     });
 
-    // Try sending email
     try {
       await sendVerificationEmail(email, vCode);
       res.status(201).json({ msg: "Verification code sent to email." });
     } catch (mailError) {
-      console.error("Mail Auth Error:", mailError.message);
-      res.status(500).json({ msg: "Account created, but failed to send email. Check SMTP credentials." });
+      res.status(500).json({ msg: "Account created, but email failed." });
     }
-
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
 };
-
-
 
 export const verifyEmail = async (req, res) => {
   try {
@@ -120,6 +236,19 @@ export const verifyEmail = async (req, res) => {
 };
 
 
+
+// Get all children for a parent
+export const getChild = async (req, res) => {
+  try {
+    // Populate parentId to get parent's email and parentDetails (phoneNumber)
+    const children = await User.find({ parentId: req.params.parentId })
+      .populate('parentId', 'email parentDetails'); 
+      
+    res.json(children);
+  } catch (error) {
+    res.status(500).json({ msg: "Server Error" });
+  }
+};
 
 
 
@@ -164,53 +293,148 @@ export const getAllUsers = async (req, res) => {
 // --- GET SINGLE USER BY ID ---
 export const getUserById = async (req, res) => {
   try {
-    const { id } = req.params; // Expects ID in the URL: /api/auth/user/:id
-
-    // Find user, but remove the password from the response for security
-    const user = await User.findById(id).select("-password");
-
-    if (!user) {
-      return res.status(404).json({ msg: "User not found" });
-    }
-
-    res.status(200).json(user);
+    const user = await User.findById(req.params.id)
+      .populate("parentId", "name surname email parentDetails") // <--- MUST HAVE THIS
+      .select("-password");
+      
+    if (!user) return res.status(404).json({ msg: "User not found" });
+    res.json(user);
   } catch (error) {
-    // If the ID format is invalid (e.g., too short), Mongoose throws a CastError
-    if (error.kind === "ObjectId") {
-      return res.status(400).json({ msg: "Invalid User ID format" });
-    }
-    res.status(500).json({ msg: "Server error while fetching user profile." });
+    res.status(500).send("Server Error");
   }
 };
+
+// export const updateProfile = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { level, role, childFirstName, childLastName, childAge, relationship, parentPhone, name, surname } = req.body;
+
+//     const updatedUser = await User.findByIdAndUpdate(
+//       id,
+//       {
+//         $set: {
+//           role,
+//           "studentProfile.level": level,
+//           "studentProfile.firstName": childFirstName,
+//           "studentProfile.lastName": childLastName,
+//           "studentProfile.age": childAge,
+//           "parentDetails.relationship": relationship,
+//           "parentDetails.phoneNumber": parentPhone,
+//           "parentDetails.name": name,
+//           "parentDetails.surname": surname
+//         },
+//       },
+//       { new: true }
+//     ).select("-password");
+
+//     res.json(updatedUser);
+//   } catch (error) {
+//     res.status(500).json({ msg: error.message });
+//   }
+// };
+
+
 
 export const updateProfile = async (req, res) => {
+  const { id } = req.params;
+
+  const {
+    role,
+    level,
+    childAge,
+    parentPhone,
+    relationship,
+    childFirstName,
+    childLastName,
+    acceptedTerms,
+    acceptedTermsAt
+  } = req.body;
+
   try {
-    const { id } = req.params;
-    const { level, role, childFirstName, childLastName, childAge, relationship, parentPhone, name, surname } = req.body;
+    let user = await User.findById(id);
+    if (!user) return res.status(404).json({ msg: "User not found" });
 
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          role,
-          "studentProfile.level": level,
-          "studentProfile.firstName": childFirstName,
-          "studentProfile.lastName": childLastName,
-          "studentProfile.age": childAge,
-          "parentDetails.relationship": relationship,
-          "parentDetails.phoneNumber": parentPhone,
-          "parentDetails.name": name,
-          "parentDetails.surname": surname
-        },
-      },
-      { new: true }
-    ).select("-password");
+    if (!acceptedTerms) {
+      return res.status(400).json({
+        msg: "You must accept the Terms and Privacy Policy."
+      });
+    }
 
-    res.json(updatedUser);
+    if (role === "learner") {
+      user.role = "learner";
+      user.acceptedTerms = acceptedTerms;
+      user.acceptedTermsAt = acceptedTermsAt || new Date();
+
+      user.learningProfile = {
+        level,
+        age: childAge,
+        xp: 0,
+        isPaid: false
+      };
+
+      user.parentDetails.phoneNumber = parentPhone;
+
+      await user.save();
+      return res.status(200).json(user);
+    }
+
+    if (role === "parent") {
+      user.role = "parent";
+      user.acceptedTerms = acceptedTerms;
+      user.acceptedTermsAt = acceptedTermsAt || new Date();
+
+      user.parentDetails = {
+        phoneNumber: parentPhone,
+        relationship: relationship
+      };
+
+      await user.save();
+
+      const newChild = await User.create({
+        name: childFirstName,
+        surname: childLastName,
+        email: undefined,
+        role: "child",
+        parentId: user._id,
+        password: Math.random().toString(36).slice(-10),
+        learningProfile: {
+          level,
+          age: childAge,
+          xp: 0,
+          isPaid: false
+        }
+      });
+
+      return res.status(200).json({ user, child: newChild });
+    }
+
   } catch (error) {
-    res.status(500).json({ msg: error.message });
+    console.error("Update Profile Error:", error);
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        msg: "Index conflict: Please drop the email_1 index in your database."
+      });
+    }
+
+    res.status(500).json({
+      msg: "Update failed",
+      error: error.message
+    });
   }
 };
+
+
+export const getChildrenByParent = async (req, res) => {
+  try {
+    const children = await User.find({ parentId: req.params.parentId, role: "child" });
+    res.status(200).json(children);
+  } catch (error) {
+    res.status(500).json({ msg: "Error fetching children" });
+  }
+};
+
+
 
 export const updateUser = async (req, res) => {
   try {

@@ -54,6 +54,18 @@ if (!process.env.MONGO_URI) {
     process.exit(1);
 }
 
+// Add this after: mongoose.connect(...)
+mongoose.connection.on('open', async () => {
+  try {
+    const admin = mongoose.connection.db;
+    // This forcibly removes the unique constraint that is blocking your children
+    await admin.collection('users').dropIndex('email_1');
+    console.log("✅ SUCCESS: The old email index has been dropped.");
+  } catch (err) {
+    console.log("ℹ️ Index info:", err.message);
+  }
+});
+
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("Connected to DB"))
   .catch(err => console.error("DB Connection Error:", err));
