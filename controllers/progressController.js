@@ -1,129 +1,101 @@
 import Progress from "../model/Progress.js";
 import User from "../model/User.js";
 
-
-// ==============================
-// ➕ SAVE PROGRESS (from Lesson)
-// ==============================
+/**
+ * @desc    Save or Update User Progress after a Quiz
+ * @route   POST /api/progress/save
+ */
 export const saveProgress = async (req, res) => {
   try {
-    const userId = req.user.id; // 🔐 from JWT middleware
+    const { user, subject, level, strand, subStrand, score, total, xp } = req.body;
 
-    const {
-      subject,
-      level,
-      strand,
-      subStrand,
-      score,
-      total,
-      xp,
-    } = req.body;
+    if (!user || !subject || !subStrand) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
 
-    // ✅ Create progress record
-    const progress = await Progress.create({
-      user: userId,
-      subject,
-      level,
-      strand,
-      subStrand,
-      score,
-      total,
-      xp,
+    // Use findOneAndUpdate with upsert:true to prevent duplicate rows for the same lesson
+    const progress = await Progress.findOneAndUpdate(
+      { user, subject, subStrand }, // Unique identifier for this lesson
+      { 
+        level, 
+        strand, 
+        score, 
+        total, 
+        xp, 
+        completedAt: Date.now() 
+      },
+      { upsert: true, new: true }
+    );
+
+    // Increment user's total XP in the User collection simultaneously
+    await User.findByIdAndUpdate(user, {
+      $inc: { "learningProfile.xp": xp }
     });
 
-    // ✅ Update user XP + streak
-    const user = await User.findById(userId);
-
-    user.xp += xp;
-    user.streak += 1;
-
-    await user.save();
-
-    res.status(201).json({
-      msg: "Progress saved successfully",
-      progress,
-      xp: user.xp,
-      streak: user.streak,
+    res.status(200).json({
+      success: true,
+      message: "Progress saved and XP updated",
+      data: progress
     });
   } catch (error) {
-    res.status(500).json({
-      msg: "Error saving progress",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-
-// ==============================
-// 📥 GET ALL USER PROGRESS
-// ==============================
+/**
+ * @desc    Get all progress records for a specific user
+ * @route   GET /api/progress/user/:userId
+ */
 export const getUserProgress = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const { userId } = req.params;
+    const history = await Progress.find({ user: userId }).sort({ completedAt: -1 });
 
-    const progress = await Progress.find({ user: userId }).sort({
-      createdAt: -1,
+    res.status(200).json({
+      success: true,
+      count: history.length,
+      data: history
     });
-
-    if (progress.length === 0) {
-      return res.status(404).json({ msg: "No progress found" });
-    }
-
-    res.json(progress);
   } catch (error) {
-    res.status(500).json({
-      msg: "Error fetching progress",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-
-// ==============================
-// 📊 GET PROGRESS BY SUBJECT
-// ==============================
-export const getProgressBySubject = async (req, res) => {
+/**
+ * @desc    Get progress for a specific subject (e.g., Science performance)
+ * @route   GET /api/progress/user/:userId/:subject
+ */
+export const getSubjectProgress = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { subject } = req.params;
-
-    const progress = await Progress.find({
-      user: userId,
-      subject,
+    const { userId, subject } = req.params;
+    const stats = await Progress.find({ 
+      user: userId, 
+      subject: new RegExp(subject, 'i') 
     });
 
-    if (progress.length === 0) {
-      return res.status(404).json({
-        msg: `No progress found for ${subject}`,
-      });
-    }
-
-    res.json(progress);
+    res.status(200).json({
+      success: true,
+      data: stats
+    });
   } catch (error) {
-    res.status(500).json({
-      msg: "Error fetching subject progress",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-
-// ==============================
-// ❌ DELETE PROGRESS (optional)
-// ==============================
-export const deleteProgress = async (req, res) => {
+/**
+ * @desc    Reset progress (Delete all records for a user)
+ * @route   DELETE /api/progress/user/:userId/reset
+ */
+export const resetProgress = async (req, res) => {
   try {
-    const progress = await Progress.findByIdAndDelete(req.params.id);
+    const { userId } = req.params;
+    await Progress.deleteMany({ user: userId });
 
-    if (!progress) {
-      return res.status(404).json({ msg: "Progress not found" });
-    }
-
-    res.json({ msg: "Progress deleted successfully" });
-  } catch (error) {
-    res.status(500).json({
-      msg: "Error deleting progress",
-      error: error.message,
+    res.status(200).json({
+      success: true,
+      message: "All learning progress has been cleared."
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };

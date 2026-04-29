@@ -8,6 +8,7 @@ import authRoutes from "./routes/authRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import progressRoutes from "./routes/progressRoutes.js";
 import subjectRoutes from "./routes/subjectRoutes.js";
+import timetableRoutes from "./routes/timetableRoutes.js";
 
 
 
@@ -47,6 +48,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/lessons", lessonRoutes);
 app.use("/api/progress", progressRoutes);
 app.use("/api/subjects", subjectRoutes);
+app.use("/api/timetable", timetableRoutes);
 
 // DB
 if (!process.env.MONGO_URI) {
