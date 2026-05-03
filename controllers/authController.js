@@ -252,6 +252,9 @@ export const getChild = async (req, res) => {
 
 
 
+
+
+
 // export const register = async (req, res) => {
 //   try {
 //     const { name, surname, email, password } = req.body;
@@ -279,6 +282,47 @@ export const login = async (req, res) => {
   }
 };
 
+
+// --- UNLOCK LESSON CONTROLLER ---
+export const unlockLesson = async (req, res) => {
+  try {
+    const { userId, lessonData } = req.body;
+
+    if (!userId || !lessonData) {
+      return res.status(400).json({ msg: "Missing User ID or Lesson Data" });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $addToSet: { 
+          unlockedLessons: {
+            subject: lessonData.subject,
+            level: lessonData.level,
+            subStrand: lessonData.subStrand,
+            unlockedAt: new Date()
+          } 
+        }
+      },
+      { returnDocument: 'after' } // Updated to fix deprecation warning
+    ).select("-password");
+
+    if (!updatedUser) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+
+    res.status(200).json({ 
+      msg: "Lesson unlocked successfully", 
+      unlockedLessons: updatedUser.unlockedLessons 
+    });
+  } catch (error) {
+    console.error("Unlock Lesson Error:", error);
+    res.status(500).json({ msg: "Server Error" });
+  }
+};
+
+
+
 // Add this to your auth routes
 export const getAllUsers = async (req, res) => {
   try {
@@ -294,7 +338,7 @@ export const getAllUsers = async (req, res) => {
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
-      .populate("parentId", "name surname email parentDetails") // <--- MUST HAVE THIS
+     .populate("parentId", "name surname email parentDetails")
       .select("-password");
       
     if (!user) return res.status(404).json({ msg: "User not found" });

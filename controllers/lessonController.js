@@ -1,6 +1,7 @@
 import Lesson from "../model/Lesson.js";
 import { v2 as cloudinary } from 'cloudinary';
 import dotenv from 'dotenv';
+import User from "../model/User.js";
 
 
 dotenv.config(); 
@@ -101,6 +102,7 @@ export const getLessonById = async (req, res) => {
     });
   }
 };
+
 
 
 

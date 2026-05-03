@@ -36,6 +36,13 @@ const userSchema = new mongoose.Schema(
   type: Date,
 },
 
+unlockedLessons: [{
+        subject: String,
+        level: String,
+        subStrand: String,
+        unlockedAt: { type: Date, default: Date.now }
+      }],
+
     // Metadata for Parents
     parentDetails: {
       phoneNumber: { type: String, default: "" },
