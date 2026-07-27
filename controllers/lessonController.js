@@ -30,13 +30,29 @@ const uploadToCloudinary = (fileBuffer) => {
   });
 };
 
+// --- HELPER: Sanitize/Trim Quiz Data ---
+const sanitizeQuiz = (quizArray) => {
+  if (!Array.isArray(quizArray)) return [];
+  return quizArray.map((q) => ({
+    ...q,
+    question: typeof q.question === "string" ? q.question.trim() : q.question,
+    answer: typeof q.answer === "string" ? q.answer.trim() : q.answer,
+    explanation: typeof q.explanation === "string" ? q.explanation.trim() : q.explanation,
+    options: Array.isArray(q.options)
+      ? q.options.map((opt) => (typeof opt === "string" ? opt.trim() : opt))
+      : [],
+  }));
+};
+
+
+
+
 // ➕ CREATE: Multiple Videos with Titles
 export const createLesson = async (req, res) => {
   try {
-    const { titles } = req.body; // Expecting an array or string from form-data
+    const { titles } = req.body;
     let videoTitles = [];
     
-    // Parse titles (form-data sends arrays as strings or multiple keys)
     if (typeof titles === 'string') videoTitles = JSON.parse(titles);
     else videoTitles = titles || [];
 
@@ -46,16 +62,20 @@ export const createLesson = async (req, res) => {
         const cloud = await uploadToCloudinary(file.buffer);
         return {
           ...cloud,
-          title: videoTitles[index] || `Video ${index + 1}` // Fallback title
+          title: videoTitles[index] || `Video ${index + 1}`
         };
       });
       videoData = await Promise.all(uploadPromises);
     }
 
+    // Sanitize quiz before creating
+    const rawQuiz = JSON.parse(req.body.quiz || "[]");
+    const sanitizedQuiz = sanitizeQuiz(rawQuiz);
+
     const lesson = await Lesson.create({
       ...req.body,
       videos: videoData,
-      quiz: JSON.parse(req.body.quiz || "[]")
+      quiz: sanitizedQuiz
     });
 
     res.status(201).json({ success: true, lesson });
@@ -111,19 +131,17 @@ export const updateLesson = async (req, res) => {
   try {
     const { titles, quiz, ...otherFields } = req.body; 
     
-    // 1. Handle Titles safely
     let videoTitles = [];
     if (titles) {
       videoTitles = typeof titles === 'string' ? JSON.parse(titles) : titles;
     }
 
-    // 2. Upload new videos if they exist
     let newVideos = [];
     if (req.files && req.files.length > 0) {
       const uploadPromises = req.files.map(async (file, index) => {
         const cloud = await uploadToCloudinary(file.buffer);
         return {
-          url: cloud.url, // FIXED: Changed cloud.secure_url to cloud.url
+          url: cloud.url,
           public_id: cloud.public_id,
           title: videoTitles[index] || `New Lesson ${index + 1}`
         };
@@ -131,17 +149,15 @@ export const updateLesson = async (req, res) => {
       newVideos = await Promise.all(uploadPromises);
     }
 
-    // 3. Prepare Update Query
-    // We strictly define what we are setting to avoid wiping out the 'videos' array
     const updateData = { ...otherFields };
 
     if (quiz) {
-      updateData.quiz = typeof quiz === 'string' ? JSON.parse(quiz) : quiz;
+      const parsedQuiz = typeof quiz === 'string' ? JSON.parse(quiz) : quiz;
+      updateData.quiz = sanitizeQuiz(parsedQuiz); // Sanitize quiz on update
     }
 
     const updateQuery = { $set: updateData };
 
-    // 4. Add new videos to the existing array without overwriting
     if (newVideos.length > 0) {
       updateQuery.$push = { videos: { $each: newVideos } };
     }
@@ -150,7 +166,7 @@ export const updateLesson = async (req, res) => {
       req.params.id,
       updateQuery,
       { 
-        new: true, // Returns the updated document
+        new: true,
         runValidators: true 
       }
     );
