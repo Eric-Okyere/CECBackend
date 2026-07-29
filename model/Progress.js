@@ -16,6 +16,8 @@ const progressSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  isCompleted: { type: Boolean, default: true }
+   
 });
 
 export default mongoose.model("Progress", progressSchema);

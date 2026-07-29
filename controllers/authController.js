@@ -4,56 +4,7 @@ import jwt from "jsonwebtoken";
 import { sendVerificationEmail } from "../services/emailService.js";
 import User from "../model/User.js";
 
-
-
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
-
-
-// export const googleLogin = async (req, res) => {
-//   const { token } = req.body;
-
-//   try {
-//     const ticket = await client.verifyIdToken({
-//       idToken: token,
-//       audience: process.env.GOOGLE_CLIENT_ID,
-//     });
-
-//     const { name, family_name, email, sub, picture } = ticket.getPayload();
-
-//     let user = await User.findOne({ email });
-
-//     if (!user) {
-//       // Create new user with Google Picture
-//       user = await User.create({
-//         name: name || "Google User",
-//         surname: family_name || "",
-//         email,
-//         googleId: sub,
-//         picture: picture, // 👈 SAVING THE URL HERE
-//         isVerified: true, 
-//         password: await bcrypt.hash(Math.random().toString(36), 10), 
-//       });
-//     } else {
-//       // 👈 UPDATE PICTURE FOR EXISTING USER
-//       // This ensures if they change their Google photo, it updates in your app too
-//       user.picture = picture;
-//       user.googleId = sub; // Ensure googleId is linked if it wasn't before
-//       await user.save();
-//     }
-
-//     const appToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-
-//     // Send the full user object back so the frontend can save the picture to localStorage
-//     res.status(200).json({ token: appToken, user });
-//   } catch (error) {
-//     console.error("Google Auth Error:", error);
-//     res.status(400).json({ msg: "Google authentication failed" });
-//   }
-// };
-
-
-// authController.js
 
 export const googleLogin = async (req, res) => {
   const { token } = req.body;
@@ -67,113 +18,86 @@ export const googleLogin = async (req, res) => {
     const { name, family_name, email, sub, picture } = ticket.getPayload();
 
     let user = await User.findOne({ email });
+    let isNewUser = false;
 
     if (!user) {
-      // Create new user with Google Picture
+      isNewUser = true; // 👈 Mark as a newly registered user
       user = await User.create({
         name: name || "Google User",
         surname: family_name || "",
         email,
         googleId: sub,
         picture: picture,
-        isVerified: true, 
-        role: "learner", // 👈 EXPLICITLY SETTING VALID ENUM ROLE
-        password: await bcrypt.hash(Math.random().toString(36), 10), 
+        isVerified: true,
+        role: "learner",
+        password: await bcrypt.hash(Math.random().toString(36), 10),
       });
     } else {
-      // UPDATE PICTURE FOR EXISTING USER
-      user.picture = picture;
-      user.googleId = sub; 
-      await user.save();
+      // Existing user: update picture & googleId without triggering full doc validation
+      user = await User.findByIdAndUpdate(
+        user._id,
+        { $set: { picture, googleId: sub } },
+        { new: true, runValidators: false }
+      );
     }
 
     const appToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-    res.status(200).json({ token: appToken, user });
+    // Send back isNewUser
+    res.status(200).json({ token: appToken, user, isNewUser });
   } catch (error) {
     console.error("Google Auth Error:", error);
-    // Checking if the error is specifically a Validation Error to give better feedback
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ msg: "Database validation failed. Check role settings." });
-    }
     res.status(400).json({ msg: "Google authentication failed" });
   }
 };
 
-
-
-
-
+// In authController.js -> addChild
 export const addChild = async (req, res) => {
   try {
-    const { parentId, firstName, lastName, age, level } = req.body;
+    // 1. Extract values from request body
+    const { parentId: bodyParentId, firstName, lastName, age, level } = req.body;
 
-    // 1. Double check the parent exists
+    // 2. Prioritize logged-in user from auth middleware, fallback to body
+    const parentId = req.user?._id || bodyParentId;
+
+    if (!parentId) {
+      return res.status(400).json({ msg: "Parent ID is required to link child." });
+    }
+
+    // 3. Verify parent exists
     const parent = await User.findById(parentId);
-    if (!parent) return res.status(404).json({ msg: "Parent not found" });
+    if (!parent) {
+      return res.status(404).json({ msg: "Parent account not found." });
+    }
 
+    // 4. Ensure parent role is set to "parent"
+    if (parent.role !== "parent") {
+      parent.role = "parent";
+      await parent.save();
+    }
+
+    // 5. Create Child with explicitly attached parentId
     const newChild = await User.create({
       name: firstName,
       surname: lastName,
-      email: undefined,      // 👈 Forces Mongoose to treat this as non-existent for the sparse index
       role: "child",
-      parentId: parentId,
+      parentId: parent._id, // 👈 Explicitly attach parent's MongoDB ID
       isVerified: true,
-      password: await bcrypt.hash(Math.random().toString(36), 10), 
+      password: await bcrypt.hash(Math.random().toString(36), 10),
       learningProfile: {
         age: Number(age),
         level,
         xp: 0,
-        isPaid: false 
+        isPaid: false
       }
     });
 
     res.status(201).json(newChild);
   } catch (error) {
     console.error("Add Child Error:", error);
-    if (error.code === 11000) {
-      return res.status(400).json({ 
-        msg: "Index Conflict. Please ask Admin to drop the 'email_1' index in MongoDB." 
-      });
-    }
-    res.status(500).json({ msg: "Error creating child profile" });
+    res.status(500).json({ msg: "Failed to create child profile", error: error.message });
   }
 };
-
-
-// export const register = async (req, res) => {
-//   try {
-//     const { name, surname, email, password } = req.body;
-    
-//     // Check if user already exists
-//     const existingUser = await User.findOne({ email });
-//     if (existingUser) return res.status(400).json({ msg: "Email already registered." });
-
-//     const vCode = Math.floor(100000 + Math.random() * 900000).toString();
-//     const hashed = await bcrypt.hash(password.toString(), 10);
-
-//     const user = await User.create({ 
-//       name, 
-//       surname, 
-//       email, 
-//       password: hashed,
-//       verificationCode: vCode,
-//       verificationExpires: Date.now() + 10 * 60 * 1000
-//     });
-
-//     // Try sending email
-//     try {
-//       await sendVerificationEmail(email, vCode);
-//       res.status(201).json({ msg: "Verification code sent to email." });
-//     } catch (mailError) {
-//       console.error("Mail Auth Error:", mailError.message);
-//       res.status(500).json({ msg: "Account created, but failed to send email. Check SMTP credentials." });
-//     }
-
-//   } catch (error) {
-//     res.status(500).json({ msg: error.message });
-//   }
-// };
 
 export const register = async (req, res) => {
   try {
@@ -190,7 +114,7 @@ export const register = async (req, res) => {
       surname, 
       email, 
       password: hashed,
-      role: "learner", // 👈 ADD THIS EXPLICITLY
+      role: "learner",
       verificationCode: vCode,
       verificationExpires: Date.now() + 10 * 60 * 1000
     });
@@ -214,7 +138,6 @@ export const verifyEmail = async (req, res) => {
     if (!user) return res.status(404).json({ msg: "User not found" });
     if (user.isVerified) return res.status(400).json({ msg: "Account already verified" });
 
-    // Check if code matches and is not expired
     if (user.verificationCode !== code) {
       return res.status(400).json({ msg: "Invalid verification code" });
     }
@@ -223,7 +146,6 @@ export const verifyEmail = async (req, res) => {
       return res.status(400).json({ msg: "Code has expired. Please request a new one." });
     }
 
-    // Mark as verified and clear the code fields
     user.isVerified = true;
     user.verificationCode = undefined;
     user.verificationExpires = undefined;
@@ -235,12 +157,8 @@ export const verifyEmail = async (req, res) => {
   }
 };
 
-
-
-// Get all children for a parent
 export const getChild = async (req, res) => {
   try {
-    // Populate parentId to get parent's email and parentDetails (phoneNumber)
     const children = await User.find({ parentId: req.params.parentId })
       .populate('parentId', 'email parentDetails'); 
       
@@ -249,22 +167,6 @@ export const getChild = async (req, res) => {
     res.status(500).json({ msg: "Server Error" });
   }
 };
-
-
-
-
-
-
-// export const register = async (req, res) => {
-//   try {
-//     const { name, surname, email, password } = req.body;
-//     const hashed = await bcrypt.hash(password.toString(), 10);
-//     const user = await User.create({ name, surname, email, password: hashed });
-//     res.status(201).json(user);
-//   } catch (error) {
-//     res.status(500).json({ msg: error.message });
-//   }
-// };
 
 export const login = async (req, res) => {
   try {
@@ -282,8 +184,6 @@ export const login = async (req, res) => {
   }
 };
 
-
-// --- UNLOCK LESSON CONTROLLER ---
 export const unlockLesson = async (req, res) => {
   try {
     const { userId, lessonData } = req.body;
@@ -304,7 +204,7 @@ export const unlockLesson = async (req, res) => {
           } 
         }
       },
-      { returnDocument: 'after' } // Updated to fix deprecation warning
+      { returnDocument: 'after' }
     ).select("-password");
 
     if (!updatedUser) {
@@ -321,12 +221,8 @@ export const unlockLesson = async (req, res) => {
   }
 };
 
-
-
-// Add this to your auth routes
 export const getAllUsers = async (req, res) => {
   try {
-    // Fetches all users, sorting by most recent, and excluding passwords
     const users = await User.find().select("-password").sort({ createdAt: -1 });
     res.json(users);
   } catch (error) {
@@ -334,11 +230,10 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
-// --- GET SINGLE USER BY ID ---
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
-     .populate("parentId", "name surname email parentDetails")
+      .populate("parentId", "name surname email parentDetails")
       .select("-password");
       
     if (!user) return res.status(404).json({ msg: "User not found" });
@@ -348,190 +243,187 @@ export const getUserById = async (req, res) => {
   }
 };
 
-// export const updateProfile = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const { level, role, childFirstName, childLastName, childAge, relationship, parentPhone, name, surname } = req.body;
-
-//     const updatedUser = await User.findByIdAndUpdate(
-//       id,
-//       {
-//         $set: {
-//           role,
-//           "studentProfile.level": level,
-//           "studentProfile.firstName": childFirstName,
-//           "studentProfile.lastName": childLastName,
-//           "studentProfile.age": childAge,
-//           "parentDetails.relationship": relationship,
-//           "parentDetails.phoneNumber": parentPhone,
-//           "parentDetails.name": name,
-//           "parentDetails.surname": surname
-//         },
-//       },
-//       { new: true }
-//     ).select("-password");
-
-//     res.json(updatedUser);
-//   } catch (error) {
-//     res.status(500).json({ msg: error.message });
-//   }
-// };
+// In authController.js -> updateProfile:
 
 
 
 export const updateProfile = async (req, res) => {
-  const { id } = req.params;
-
-  const {
-    role,
-    level,
-    childAge,
-    parentPhone,
-    relationship,
-    childFirstName,
-    childLastName,
-    acceptedTerms,
-    acceptedTermsAt
-  } = req.body;
-
   try {
-    let user = await User.findById(id);
-    if (!user) return res.status(404).json({ msg: "User not found" });
+    const userId = req.params.id || req.params.userId;
 
-    if (!acceptedTerms) {
-      return res.status(400).json({
-        msg: "You must accept the Terms and Privacy Policy."
-      });
+    const {
+      role,
+      name,
+      surname,
+      acceptedTerms,
+      acceptedTermsAt,
+      learningProfile,
+      parentDetails,
+      disabilityProfile,
+      gender,
+    } = req.body;
+
+    // 1. Find user by ID
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ msg: "User not found." });
     }
 
-    if (role === "learner") {
-      user.role = "learner";
-      user.acceptedTerms = acceptedTerms;
-      user.acceptedTermsAt = acceptedTermsAt || new Date();
+    // 2. Update basic/root fields if provided
+    if (name) user.name = name;
+    if (surname) user.surname = surname;
+    if (role) user.role = role;
+    if (acceptedTerms !== undefined) user.acceptedTerms = acceptedTerms;
+    if (acceptedTermsAt) user.acceptedTermsAt = acceptedTermsAt;
 
+    // Handle gender (support both root-level and inside learningProfile)
+    if (gender) {
+      user.gender = gender;
+    } else if (learningProfile?.gender) {
+      user.gender = learningProfile.gender;
+    }
+
+    // 3. Merge nested profiles safely (preserves existing fields inside sub-documents)
+    if (learningProfile) {
       user.learningProfile = {
-        level,
-        age: childAge,
-        xp: 0,
-        isPaid: false
+        ...user.learningProfile?.toObject?.() || user.learningProfile,
+        ...learningProfile,
       };
-
-      user.parentDetails.phoneNumber = parentPhone;
-
-      await user.save();
-      return res.status(200).json(user);
     }
 
-    if (role === "parent") {
-      user.role = "parent";
-      user.acceptedTerms = acceptedTerms;
-      user.acceptedTermsAt = acceptedTermsAt || new Date();
-
+    if (parentDetails) {
       user.parentDetails = {
-        phoneNumber: parentPhone,
-        relationship: relationship
+        ...user.parentDetails?.toObject?.() || user.parentDetails,
+        ...parentDetails,
       };
-
-      await user.save();
-
-      const newChild = await User.create({
-        name: childFirstName,
-        surname: childLastName,
-        email: undefined,
-        role: "child",
-        parentId: user._id,
-        password: Math.random().toString(36).slice(-10),
-        learningProfile: {
-          level,
-          age: childAge,
-          xp: 0,
-          isPaid: false
-        }
-      });
-
-      return res.status(200).json({ user, child: newChild });
     }
 
+    if (disabilityProfile) {
+      user.disabilityProfile = {
+        ...user.disabilityProfile?.toObject?.() || user.disabilityProfile,
+        ...disabilityProfile,
+      };
+    }
+
+    // 4. Save and respond
+    await user.save();
+
+    // Convert to plain object and remove password before returning
+    const updatedUserObj = user.toObject();
+    delete updatedUserObj.password;
+
+    return res.status(200).json({
+      msg: "Profile updated successfully",
+      user: updatedUserObj,
+    });
   } catch (error) {
     console.error("Update Profile Error:", error);
-
-    if (error.code === 11000) {
-      return res.status(400).json({
-        msg: "Index conflict: Please drop the email_1 index in your database."
-      });
-    }
-
-    res.status(500).json({
-      msg: "Update failed",
-      error: error.message
+    return res.status(500).json({
+      msg: "Server error updating profile",
+      error: error.message,
     });
   }
 };
 
 
+
 export const getChildrenByParent = async (req, res) => {
   try {
-    const children = await User.find({ parentId: req.params.parentId, role: "child" });
+    const { parentId } = req.params;
+
+    // Build flexible query matching string or ObjectId
+    const queryConditions = [{ parentId: parentId }];
+    if (mongoose.Types.ObjectId.isValid(parentId)) {
+      queryConditions.push({ parentId: new mongoose.Types.ObjectId(parentId) });
+    }
+
+    const children = await User.find({
+      $or: queryConditions,
+      role: "child"
+    });
+
     res.status(200).json(children);
   } catch (error) {
+    console.error("Get Children Error:", error);
     res.status(500).json({ msg: "Error fetching children" });
   }
 };
 
-
-
+// --- UPDATED USER CONTROLLER FOR ADMIN / USER MANAGEMENT ---
 export const updateUser = async (req, res) => {
   try {
+    const { id } = req.params;
     const { 
       name, 
       surname, 
-      firstName, // Received from frontend mapping
-      lastName,  // Received from frontend mapping
+      firstName, 
+      lastName, 
+      email,
+      role,
       level, 
       age, 
       phoneNumber, 
-      role 
+      relationship,
+      password,
+      isVerified,
+      hasDisability,
+      disabilityDetails
     } = req.body;
-    
-    const updatedUser = await User.findByIdAndUpdate(
-      req.params.id,
-      {
-        $set: {
-          name,
-          surname,
-          role,
-          "studentProfile.firstName": firstName,
-          "studentProfile.lastName": lastName,
-          "studentProfile.level": level,
-          "studentProfile.age": age,
-          "parentDetails.phoneNumber": phoneNumber
-        }
-      },
-      { new: true } // Return updated object
-    ).select("-password");
 
-    if (!updatedUser) return res.status(404).json({ msg: "User not found" });
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ msg: "User not found" });
 
-    res.json(updatedUser);
+    // Update Basic Information
+    if (name !== undefined) user.name = name || firstName;
+    if (surname !== undefined) user.surname = surname || lastName;
+    if (email !== undefined) user.email = email;
+    if (role !== undefined) user.role = role;
+    if (isVerified !== undefined) user.isVerified = isVerified;
+
+    // Update Password if specified
+    if (password && password.trim() !== "") {
+      user.password = await bcrypt.hash(password.toString(), 10);
+    }
+
+    // Update Disability Profile
+    if (hasDisability !== undefined) user.hasDisability = hasDisability;
+    if (disabilityDetails !== undefined) user.disabilityDetails = disabilityDetails;
+
+    // Update Learning Profile (level & age)
+    if (!user.learningProfile) user.learningProfile = {};
+    if (level !== undefined) user.learningProfile.level = level;
+    if (age !== undefined) user.learningProfile.age = Number(age);
+
+    // Update Parent Details
+    if (!user.parentDetails) user.parentDetails = {};
+    if (phoneNumber !== undefined) user.parentDetails.phoneNumber = phoneNumber;
+    if (relationship !== undefined) user.parentDetails.relationship = relationship;
+
+    await user.save();
+
+    // Exclude password from the returned object
+    const updatedUserObj = user.toObject();
+    delete updatedUserObj.password;
+
+    res.status(200).json(updatedUserObj);
   } catch (error) {
     console.error("Backend Update Error:", error);
-    res.status(500).json({ msg: "Failed to update user info." });
+    if (error.code === 11000) {
+      return res.status(400).json({ msg: "Email address already exists." });
+    }
+    res.status(500).json({ msg: "Failed to update user info.", error: error.message });
   }
 };
 
-
-// --- DELETE USER BY ID ---
 export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user exists
     const user = await User.findById(id);
     if (!user) {
       return res.status(404).json({ msg: "User not found" });
     }
 
-    // Delete the user
     await User.findByIdAndDelete(id);
 
     res.status(200).json({ msg: "User account deleted successfully" });
