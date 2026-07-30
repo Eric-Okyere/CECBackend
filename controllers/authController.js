@@ -52,10 +52,19 @@ export const googleLogin = async (req, res) => {
 };
 
 // In authController.js -> addChild
+// In authController.js -> addChild
 export const addChild = async (req, res) => {
   try {
-    // 1. Extract values from request body
-    const { parentId: bodyParentId, firstName, lastName, age, level } = req.body;
+    // 1. Extract values from request body (including gender & disabilityProfile)
+    const { 
+      parentId: bodyParentId, 
+      firstName, 
+      lastName, 
+      age, 
+      level, 
+      gender, 
+      disabilityProfile 
+    } = req.body;
 
     // 2. Prioritize logged-in user from auth middleware, fallback to body
     const parentId = req.user?._id || bodyParentId;
@@ -76,14 +85,21 @@ export const addChild = async (req, res) => {
       await parent.save();
     }
 
-    // 5. Create Child with explicitly attached parentId
+    // 5. Create Child with gender and disabilityProfile attached
     const newChild = await User.create({
       name: firstName,
       surname: lastName,
+      gender: gender || "", // 👈 Store gender ("Male", "Female", or "")
       role: "child",
       parentId: parent._id, // 👈 Explicitly attach parent's MongoDB ID
       isVerified: true,
       password: await bcrypt.hash(Math.random().toString(36), 10),
+      disabilityProfile: disabilityProfile || { // 👈 Pass disability profile
+        hasDisability: false,
+        type: "None",
+        details: "",
+        accommodationsNeeded: ""
+      },
       learningProfile: {
         age: Number(age),
         level,
