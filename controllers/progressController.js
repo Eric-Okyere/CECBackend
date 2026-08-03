@@ -7,64 +7,59 @@ import User from "../model/User.js";
  */
 export const saveProgress = async (req, res) => {
   try {
-    // Read user ID from auth middleware or body fallback
-    const userId = req.user?._id || req.user?.id || req.body.user;
-    const { subject, level, strand, subStrand, lessonNumber, score, total, xp = 0 } = req.body;
+    const { 
+      userId, 
+      user,
+      lessonId, 
+      lesson,
+      subject, 
+      level, 
+      strand, 
+      subStrand, 
+      lessonNumber,
+      lessonName, 
+      score, 
+      total, 
+      xp 
+    } = req.body;
 
-    if (!userId || !subject || !subStrand) {
-      return res.status(400).json({ success: false, message: "Missing required fields: user, subject, subStrand" });
+    // Fallback order: req.body.userId -> req.body.user -> req.user._id
+    const targetUserId = userId || user || req.user?._id || req.user?.id;
+    const targetLessonId = lessonId || lesson;
+
+    if (!targetUserId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "User ID is required to save progress." 
+      });
     }
 
-    // 1. Save or Update in Progress Collection
-    const progress = await Progress.findOneAndUpdate(
-      { user: userId, subject, subStrand, level },
-      { 
-        strand, 
-        lessonNumber,
-        score, 
-        total, 
-        xp, 
-        isCompleted: true, // 👈 Mark lesson completed
-        completedAt: new Date() 
-      },
-      { upsert: true, new: true }
-    );
-
-    // 2. Update User Document: Add to unlockedLessons array & Increment total XP
-    const user = await User.findById(userId);
-
-    if (user) {
-      // Check if lesson is already in unlockedLessons array
-      const alreadyUnlocked = user.unlockedLessons.some(
-        (item) =>
-          item.subject?.toLowerCase() === subject?.toLowerCase() &&
-          item.level?.toLowerCase() === level?.toLowerCase() &&
-          item.subStrand?.toLowerCase() === subStrand?.toLowerCase()
-      );
-
-      if (!alreadyUnlocked) {
-        user.unlockedLessons.push({
-          subject,
-          level,
-          subStrand,
-          unlockedAt: new Date(),
-        });
-      }
-
-      // Increment XP in learning profile
-      user.learningProfile = user.learningProfile || {};
-      user.learningProfile.xp = (user.learningProfile.xp || 0) + Number(xp);
-
-      await user.save();
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Progress saved, lesson marked as completed, and XP updated",
-      data: progress
+    const newProgress = new Progress({
+      user: targetUserId,
+      lesson: targetLessonId,       
+      lessonNumber: Number(lessonNumber) || 1,
+      lessonName: lessonName || "Lesson", 
+      subject,
+      level,
+      strand,
+      subStrand,
+      score: Number(score) || 0,
+      total: Number(total) || 0,
+      xp: Number(xp) || 0,
     });
+
+    await newProgress.save();
+
+    // Optionally update user's cumulative XP directly on the User model
+    if (xp) {
+      await User.findByIdAndUpdate(targetUserId, {
+        $inc: { "learningProfile.xp": Number(xp), xp: Number(xp) }
+      });
+    }
+
+    res.status(201).json({ success: true, data: newProgress });
   } catch (error) {
-    console.error("Save Progress Error:", error);
+    console.error("Error saving progress:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -76,12 +71,23 @@ export const saveProgress = async (req, res) => {
 export const getUserProgress = async (req, res) => {
   try {
     const userId = req.params.userId || req.user?._id;
-    const history = await Progress.find({ user: userId }).sort({ completedAt: -1 });
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "No user ID provided" });
+    }
+
+    const history = await Progress.find({ user: userId })
+      .populate({
+        path: "lesson",
+        select: "lessonName lessonNumber videos",
+        strictPopulate: false
+      })
+      .sort({ completedAt: -1, createdAt: -1 });
 
     res.status(200).json({
       success: true,
       count: history.length,
-      data: history
+      data: history,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -89,7 +95,7 @@ export const getUserProgress = async (req, res) => {
 };
 
 /**
- * @desc    Get progress for a specific subject (e.g., Science performance)
+ * @desc    Get progress for a specific subject
  * @route   GET /api/progress/user/:userId/:subject
  */
 export const getSubjectProgress = async (req, res) => {
@@ -120,8 +126,7 @@ export const resetProgress = async (req, res) => {
     const userId = req.params.userId || req.user?._id;
     await Progress.deleteMany({ user: userId });
 
-    // Clear unlockedLessons on user model as well
-    await User.findByIdAndUpdate(userId, { $set: { unlockedLessons: [] } });
+    await User.findByIdAndUpdate(userId, { $set: { unlockedLessons: [], "learningProfile.xp": 0 } });
 
     res.status(200).json({
       success: true,

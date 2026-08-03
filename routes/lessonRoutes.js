@@ -6,7 +6,7 @@ import {
   getLessonById, 
   updateLesson, 
   deleteLesson,
-  deleteVideoFromLesson // Adding this for granular control
+  deleteVideoFromLesson, // Adding this for granular control
 } from "../controllers/lessonController.js";
 
 const router = express.Router();
