@@ -431,6 +431,65 @@ export const updateUser = async (req, res) => {
   }
 };
 
+
+
+export const AdminupdateUser = async (req, res) => {
+  const { id } = req.params;
+  const { name, surname, email, role, level, age, phoneNumber, isVerified, admin } = req.body;
+
+  try {
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          name,
+          surname,
+          email,
+          role,
+          admin, // Updates admin status boolean
+          isVerified,
+          "learningProfile.level": level,
+          "learningProfile.age": age,
+          "parentDetails.phoneNumber": phoneNumber,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ msg: "User not found." });
+    }
+
+    res.status(200).json(updatedUser);
+  } catch (error) {
+    console.error("Error updating user:", error);
+    res.status(500).json({ msg: "Server error updating user details." });
+  }
+};
+
+// PATCH: Dedicated endpoint to toggle admin status
+export const toggleAdminStatus = async (req, res) => {
+  const { id } = req.params;
+  const { admin } = req.body;
+
+  try {
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      { $set: { admin } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ msg: "User not found." });
+    }
+
+    res.status(200).json(updatedUser);
+  } catch (error) {
+    console.error("Error toggling admin status:", error);
+    res.status(500).json({ msg: "Failed to update admin permission." });
+  }
+};
+
 export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;

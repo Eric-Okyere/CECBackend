@@ -5,6 +5,7 @@ import { register, login, updateProfile, getAllUsers, updateUser,
     deleteUser, getChild,
     addChild,
     unlockLesson,
+    AdminupdateUser,
  } from "../controllers/authController.js";
 
 const router = express.Router();
@@ -19,5 +20,6 @@ router.post("/add-child", addChild);
 router.put("/update-profile/:id", updateProfile);
 router.post("/google-login", googleLogin);
 router.put("/update-user/:id", updateUser);
+router.put("/adminupdate-user/:id", AdminupdateUser);
 router.delete("/user/:id", deleteUser);
 export default router;
