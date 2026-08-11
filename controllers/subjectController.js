@@ -323,16 +323,21 @@ export const getLessonsBySubStrand = async (req, res) => {
 };
 
 /**
- * @desc    Update Subject Identity (Name or Level)
+ * @desc    Update Subject Identity (Name, Level, Strands, and Sub-strands)
  * @route   PUT /api/subjects/:id
  */
 export const updateSubject = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { id } = req.params;
-    const { name, level } = req.body;
+    const { name, level, strands } = req.body;
 
-    const currentSubject = await Subject.findById(id);
+    const currentSubject = await Subject.findById(id).session(session);
     if (!currentSubject) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ success: false, msg: "Subject not found" });
     }
 
@@ -343,9 +348,11 @@ export const updateSubject = async (req, res) => {
       name: newName,
       level: newLevel,
       _id: { $ne: id },
-    });
+    }).session(session);
 
     if (existing) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         msg: "Another subject already exists with this name and level.",
@@ -354,12 +361,69 @@ export const updateSubject = async (req, res) => {
 
     currentSubject.name = newName;
     currentSubject.level = newLevel;
-    await currentSubject.save();
+
+    // Process nested strands and sub-strands
+    if (Array.isArray(strands)) {
+      const processedStrands = [];
+
+      for (const strand of strands) {
+        const subStrandIds = [];
+
+        if (Array.isArray(strand.subStrands)) {
+          for (const ss of strand.subStrands) {
+            // Case A: Existing SubStrand Document (24-character ObjectId)
+            if (typeof ss === 'object' && ss !== null && ss._id && ss._id.length === 24) {
+              await SubStrand.findByIdAndUpdate(
+                ss._id,
+                { 
+                  ...(ss.title && { title: ss.title.trim() }),
+                  ...(ss.code !== undefined && { code: ss.code.trim() })
+                },
+                { session }
+              );
+              subStrandIds.push(ss._id);
+            } 
+            // Case B: New SubStrand Object (Create new MongoDB doc)
+            else if (typeof ss === 'object' && ss !== null && ss.title) {
+              const [createdSubStrand] = await SubStrand.create(
+                [
+                  {
+                    title: ss.title.trim(),
+                    code: ss.code ? ss.code.trim() : "",
+                  },
+                ],
+                { session }
+              );
+              subStrandIds.push(createdSubStrand._id);
+            } 
+            // Case C: SubStrand already passed as String ID
+            else if (typeof ss === 'string') {
+              subStrandIds.push(ss);
+            }
+          }
+        }
+
+        processedStrands.push({
+          ...(strand._id && strand._id.length === 24 ? { _id: strand._id } : {}),
+          title: strand.title ? strand.title.trim() : "",
+          subStrands: subStrandIds,
+        });
+      }
+
+      currentSubject.strands = processedStrands;
+    }
+
+    await currentSubject.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
 
     const populatedSubject = await populateSubjectStrands(Subject.findById(id));
 
     return res.status(200).json({ success: true, data: populatedSubject });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     if (error.kind === "ObjectId") {
       return res.status(400).json({ success: false, msg: "Invalid Subject ID format" });
     }

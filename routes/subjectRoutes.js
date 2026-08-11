@@ -17,41 +17,64 @@ import {
 const router = express.Router();
 
 // -----------------------------------------------------------------------------
-// Subject Routes (/api/subjects)
+// Specialized Lesson Query Routes
+// Base Path: /api/subjects
 // -----------------------------------------------------------------------------
 
-
+// GET /api/subjects/grouped
 router.get("/grouped", getLessonsGroupedBySubstrand);
+
+// GET /api/subjects/by-substrand
 router.get("/by-substrand", getLessonsForSingleSubstrand);
 
 
+// -----------------------------------------------------------------------------
+// Core Subject Routes
+// Base Path: /api/subjects
+// -----------------------------------------------------------------------------
 
+// POST /api/subjects        -> Create Subject
+// GET  /api/subjects        -> Get All Subjects
 router.route("/")
   .post(createSubject)
   .get(getSubjects);
-  
 
+// GET    /api/subjects/:id  -> Get Subject by ID
+// PUT    /api/subjects/:id  -> Update Subject (Name, Level, Strands, SubStrands)
+// DELETE /api/subjects/:id  -> Delete Subject
 router.route("/:id")
   .get(getSubjectById)
   .put(updateSubject)
   .delete(deleteSubject);
 
-// -----------------------------------------------------------------------------
-// Strand Routes (/api/subjects/:id/strands...)
-// -----------------------------------------------------------------------------
-router.post("/:id/strands", addStrandToSubject);
 
+// -----------------------------------------------------------------------------
+// Standalone Strand Routes
+// Base Path: /api/subjects
+// -----------------------------------------------------------------------------
+
+// POST /api/subjects/:id/strands -> Add a new Strand to Subject
+router.route("/:id/strands")
+  .post(addStrandToSubject);
+
+// PATCH  /api/subjects/:id/strands/:strandId -> Update Strand Title
+// DELETE /api/subjects/:id/strands/:strandId -> Delete Strand & SubStrands
 router.route("/:id/strands/:strandId")
   .patch(updateStrand)
   .delete(deleteStrand);
 
-// -----------------------------------------------------------------------------
-// Sub-Strand Routes
-// -----------------------------------------------------------------------------
-// Create sub-strand nested inside a specific strand
-router.post("/:id/strands/:strandId/sub-strands", addSubStrandToStrand);
 
-// Update individual sub-strand directly by its ID
-router.put("/sub-strands/:subStrandId", updateSubStrand);
+// -----------------------------------------------------------------------------
+// Standalone SubStrand Routes
+// Base Path: /api/subjects
+// -----------------------------------------------------------------------------
+
+// PATCH /api/subjects/:id/strands/:strandId/sub-strands -> Add SubStrand
+router.route("/:id/strands/:strandId/sub-strands")
+  .patch(addSubStrandToStrand);
+
+// PUT /api/subjects/sub-strands/:subStrandId -> Update SubStrand directly
+router.route("/sub-strands/:subStrandId")
+  .put(updateSubStrand);
 
 export default router;
