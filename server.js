@@ -10,6 +10,7 @@ import progressRoutes from "./routes/progressRoutes.js";
 import subjectRoutes from "./routes/subjectRoutes.js";
 import timetableRoutes from "./routes/timetableRoutes.js";
 import feedbackRoutes from './routes/feedbackRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 
 
 
@@ -51,6 +52,7 @@ app.use("/api/progress", progressRoutes);
 app.use("/api/subjects", subjectRoutes);
 app.use("/api/timetable", timetableRoutes);
 app.use('/api/feedback', feedbackRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // DB
 if (!process.env.MONGO_URI) {
