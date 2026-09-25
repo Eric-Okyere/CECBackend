@@ -1,11 +1,11 @@
-const axios = require("axios");
-const crypto = require("crypto");
-const Transaction = require("../models/Transaction");
+import axios from "axios";
+import crypto from "crypto";
+import Transaction from "../model/Transaction.js";
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
 // 1. Initialize Payment
-exports.initializePayment = async (req, res) => {
+export const initializePayment = async (req, res) => {
   const { email, amount, userId, planType } = req.body;
 
   if (!email || !amount || !userId) {
@@ -53,7 +53,7 @@ exports.initializePayment = async (req, res) => {
 };
 
 // 2. Direct Payment Verification
-exports.verifyPayment = async (req, res) => {
+export const verifyPayment = async (req, res) => {
   const { reference } = req.params;
 
   try {
@@ -94,7 +94,7 @@ exports.verifyPayment = async (req, res) => {
 };
 
 // 3. Paystack Webhook Event Handler
-exports.handleWebhook = async (req, res) => {
+export const handleWebhook = async (req, res) => {
   try {
     const hash = crypto
       .createHmac("sha512", PAYSTACK_SECRET_KEY)

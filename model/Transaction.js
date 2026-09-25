@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const TransactionSchema = new mongoose.Schema(
   {
@@ -42,4 +42,5 @@ const TransactionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Transaction", TransactionSchema);
+// ✅ ES Module Export
+export default mongoose.models.Transaction || mongoose.model("Transaction", TransactionSchema);
