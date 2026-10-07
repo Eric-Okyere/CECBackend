@@ -1,80 +1,44 @@
 import express from "express";
-import { 
-  createSubject, 
-  getSubjects, 
+import {
+  createSubject,
+  getSubjects,
   getSubjectById,
   updateSubject,
   deleteSubject,
-  addStrandToSubject, 
+  addStrandToSubject,
   updateStrand,
   deleteStrand,
   addSubStrandToStrand,
   updateSubStrand,
   getLessonsGroupedBySubstrand,
-  getLessonsForSingleSubstrand
+  getLessonsForSingleSubstrand,
 } from "../controllers/subjectController.js";
+import { protect, adminOnly } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+const admin = [protect, adminOnly];
 
-// -----------------------------------------------------------------------------
-// Specialized Lesson Query Routes
-// Base Path: /api/subjects
-// -----------------------------------------------------------------------------
-
-// GET /api/subjects/grouped
+// Public reads (must come before "/:id")
 router.get("/grouped", getLessonsGroupedBySubstrand);
-
-// GET /api/subjects/by-substrand
 router.get("/by-substrand", getLessonsForSingleSubstrand);
 
+router.route("/").get(getSubjects).post(...admin, createSubject);
 
-// -----------------------------------------------------------------------------
-// Core Subject Routes
-// Base Path: /api/subjects
-// -----------------------------------------------------------------------------
+// Admin writes for sub-strands (must come before "/:id")
+router.put("/sub-strands/:subStrandId", ...admin, updateSubStrand);
 
-// POST /api/subjects        -> Create Subject
-// GET  /api/subjects        -> Get All Subjects
-router.route("/")
-  .post(createSubject)
-  .get(getSubjects);
-
-// GET    /api/subjects/:id  -> Get Subject by ID
-// PUT    /api/subjects/:id  -> Update Subject (Name, Level, Strands, SubStrands)
-// DELETE /api/subjects/:id  -> Delete Subject
-router.route("/:id")
+router
+  .route("/:id")
   .get(getSubjectById)
-  .put(updateSubject)
-  .delete(deleteSubject);
+  .put(...admin, updateSubject)
+  .delete(...admin, deleteSubject);
 
-
-// -----------------------------------------------------------------------------
-// Standalone Strand Routes
-// Base Path: /api/subjects
-// -----------------------------------------------------------------------------
-
-// POST /api/subjects/:id/strands -> Add a new Strand to Subject
-router.route("/:id/strands")
-  .post(addStrandToSubject);
-
-// PATCH  /api/subjects/:id/strands/:strandId -> Update Strand Title
-// DELETE /api/subjects/:id/strands/:strandId -> Delete Strand & SubStrands
-router.route("/:id/strands/:strandId")
-  .patch(updateStrand)
-  .delete(deleteStrand);
-
-
-// -----------------------------------------------------------------------------
-// Standalone SubStrand Routes
-// Base Path: /api/subjects
-// -----------------------------------------------------------------------------
-
-// PATCH /api/subjects/:id/strands/:strandId/sub-strands -> Add SubStrand
-router.route("/:id/strands/:strandId/sub-strands")
-  .patch(addSubStrandToStrand);
-
-// PUT /api/subjects/sub-strands/:subStrandId -> Update SubStrand directly
-router.route("/sub-strands/:subStrandId")
-  .put(updateSubStrand);
+// The admin page sends PATCH; POST kept for compatibility.
+router.route("/:id/strands").post(...admin, addStrandToSubject).patch(...admin, addStrandToSubject);
+router
+  .route("/:id/strands/:strandId")
+  .patch(...admin, updateStrand)
+  .delete(...admin, deleteStrand);
+router.patch("/:id/strands/:strandId/sub-strands", ...admin, addSubStrandToStrand);
 
 export default router;

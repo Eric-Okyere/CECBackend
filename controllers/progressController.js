@@ -1,138 +1,105 @@
+import mongoose from "mongoose";
 import Progress from "../model/Progress.js";
+import Lesson from "../model/Lesson.js";
 import User from "../model/User.js";
+import { canActForUser } from "../middleware/authMiddleware.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+
+const XP_PER_CORRECT_ANSWER = 2;
 
 /**
- * @desc    Save or Update User Progress & Mark Lesson as Completed
+ * @desc    Save a quiz attempt and award XP
  * @route   POST /api/progress/save
+ *
+ * XP is calculated on the server from the score (it used to be trusted from the
+ * browser, so anyone could send xp: 999999). Retaking a lesson only awards the
+ * XP *improvement* over your best previous attempt, so lessons can't be farmed.
  */
 export const saveProgress = async (req, res) => {
-  try {
-    const { 
-      userId, 
-      user,
-      lessonId, 
-      lesson,
-      subject, 
-      level, 
-      strand, 
-      subStrand, 
-      lessonNumber,
-      lessonName, 
-      score, 
-      total, 
-      xp 
-    } = req.body;
+  const {
+    userId, user, lessonId, lesson,
+    subject, level, strand, subStrand,
+    lessonNumber, lessonName, score, total,
+  } = req.body || {};
 
-    // Fallback order: req.body.userId -> req.body.user -> req.user._id
-    const targetUserId = userId || user || req.user?._id || req.user?.id;
-    const targetLessonId = lessonId || lesson;
+  const targetUserId = String(userId || user || req.userId);
+  const targetLessonId = lessonId || lesson;
 
-    if (!targetUserId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "User ID is required to save progress." 
-      });
-    }
-
-    const newProgress = new Progress({
-      user: targetUserId,
-      lesson: targetLessonId,       
-      lessonNumber: Number(lessonNumber) || 1,
-      lessonName: lessonName || "Lesson", 
-      subject,
-      level,
-      strand,
-      subStrand,
-      score: Number(score) || 0,
-      total: Number(total) || 0,
-      xp: Number(xp) || 0,
-    });
-
-    await newProgress.save();
-
-    // Optionally update user's cumulative XP directly on the User model
-    if (xp) {
-      await User.findByIdAndUpdate(targetUserId, {
-        $inc: { "learningProfile.xp": Number(xp), xp: Number(xp) }
-      });
-    }
-
-    res.status(201).json({ success: true, data: newProgress });
-  } catch (error) {
-    console.error("Error saving progress:", error);
-    res.status(500).json({ success: false, message: error.message });
+  if (!(await canActForUser(req, targetUserId))) {
+    return res.status(403).json({ success: false, message: "You do not have access to this account." });
   }
+
+  // Work out the real number of questions from the lesson when we can.
+  let questionCount = Math.max(0, Math.floor(Number(total) || 0));
+  let lessonDoc = null;
+  if (targetLessonId && mongoose.Types.ObjectId.isValid(targetLessonId)) {
+    lessonDoc = await Lesson.findById(targetLessonId).select("quiz lessonNumber lessonName").lean();
+    if (lessonDoc) questionCount = lessonDoc.quiz?.length || 0;
+  }
+
+  const safeScore = Math.min(Math.max(0, Math.floor(Number(score) || 0)), questionCount);
+  const earnedXP = safeScore * XP_PER_CORRECT_ANSWER;
+
+  // Best previous XP for this lesson -> only award the improvement.
+  let awardedXP = earnedXP;
+  if (lessonDoc) {
+    const best = await Progress.findOne({ user: targetUserId, lesson: lessonDoc._id })
+      .sort({ xp: -1 })
+      .select("xp")
+      .lean();
+    awardedXP = Math.max(0, earnedXP - (best?.xp || 0));
+  }
+
+  const newProgress = await Progress.create({
+    user: targetUserId,
+    lesson: lessonDoc?._id,
+    lessonNumber: Number(lessonNumber) || lessonDoc?.lessonNumber || 1,
+    lessonName: lessonName || lessonDoc?.lessonName || "Lesson",
+    subject,
+    level,
+    strand,
+    subStrand,
+    score: safeScore,
+    total: questionCount,
+    xp: earnedXP,
+  });
+
+  if (awardedXP > 0) {
+    await User.updateOne({ _id: targetUserId }, { $inc: { "learningProfile.xp": awardedXP } });
+  }
+
+  res.status(201).json({ success: true, data: newProgress, xpAwarded: awardedXP });
 };
 
 /**
- * @desc    Get all progress records for a specific user
  * @route   GET /api/progress/user/:userId
  */
 export const getUserProgress = async (req, res) => {
-  try {
-    const userId = req.params.userId || req.user?._id;
+  const history = await Progress.find({ user: req.params.userId })
+    .populate({ path: "lesson", select: "lessonName lessonNumber videos", strictPopulate: false })
+    .sort({ completedAt: -1 });
 
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "No user ID provided" });
-    }
-
-    const history = await Progress.find({ user: userId })
-      .populate({
-        path: "lesson",
-        select: "lessonName lessonNumber videos",
-        strictPopulate: false
-      })
-      .sort({ completedAt: -1, createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: history.length,
-      data: history,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.status(200).json({ success: true, count: history.length, data: history });
 };
 
 /**
- * @desc    Get progress for a specific subject
- * @route   GET /api/progress/user/:userId/:subject
+ * @route   GET /api/progress/:userId/:subject
  */
 export const getSubjectProgress = async (req, res) => {
-  try {
-    const userId = req.params.userId || req.user?._id;
-    const { subject } = req.params;
-
-    const stats = await Progress.find({ 
-      user: userId, 
-      subject: new RegExp(subject, 'i') 
-    });
-
-    res.status(200).json({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const stats = await Progress.find({
+    user: req.params.userId,
+    subject: new RegExp(escapeRegex(req.params.subject), "i"),
+  });
+  res.status(200).json({ success: true, data: stats });
 };
 
 /**
- * @desc    Reset progress (Delete all records for a user)
- * @route   DELETE /api/progress/user/:userId/reset
+ * @route   DELETE /api/progress/:userId/reset
  */
 export const resetProgress = async (req, res) => {
-  try {
-    const userId = req.params.userId || req.user?._id;
-    await Progress.deleteMany({ user: userId });
+  const { userId } = req.params;
+  await Progress.deleteMany({ user: userId });
+  await User.updateOne({ _id: userId }, { $set: { unlockedLessons: [], "learningProfile.xp": 0 } });
 
-    await User.findByIdAndUpdate(userId, { $set: { unlockedLessons: [], "learningProfile.xp": 0 } });
-
-    res.status(200).json({
-      success: true,
-      message: "All learning progress has been cleared."
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.status(200).json({ success: true, message: "All learning progress has been cleared." });
 };

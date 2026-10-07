@@ -1,325 +1,303 @@
+import fs from "fs/promises";
+import mongoose from "mongoose";
+import cloudinary from "../config/cloudinary.js";
 import Lesson from "../model/Lesson.js";
 import SubStrand from "../model/SubStrand.js";
-import { v2 as cloudinary } from "cloudinary";
-import dotenv from "dotenv";
-import mongoose from "mongoose";
+import Subject from "../model/Subject.js";
+import Progress from "../model/Progress.js"; // was missing -> crashed when ?userId= was passed
+import { exactInsensitive } from "../utils/escapeRegex.js";
 
-dotenv.config();
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(String(id || ""));
 
-cloudinary.config({
-  cloud_name: process.env.CLOUD_NAME,
-  api_key: process.env.API_KEY,
-  api_secret: process.env.API_SECRET,
-});
+// --- HELPERS ---------------------------------------------------------------
 
-// --- HELPER: Cloudinary Upload Stream ---
-const uploadToCloudinary = (fileBuffer) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { resource_type: "video", folder: "lessons" },
+// Uploads from the temp file on disk; upload_large sends it in chunks (needed > 100 MB).
+const uploadToCloudinary = (filePath) =>
+  new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_large(
+      filePath,
+      { resource_type: "video", folder: "lessons", chunk_size: 20 * 1024 * 1024 },
       (error, result) => {
         if (error) return reject(error);
-        resolve({
-          url: result.secure_url,
-          public_id: result.public_id,
-        });
+        resolve({ url: result.secure_url, public_id: result.public_id });
       }
     );
-    uploadStream.end(fileBuffer);
   });
+
+const removeTempFiles = async (files = []) => {
+  await Promise.all(files.map((f) => (f?.path ? fs.unlink(f.path).catch(() => null) : null)));
 };
 
-// --- HELPER: Cloudinary Bulk Cleanup on Failure ---
 const rollbackCloudinaryUploads = async (publicIds = []) => {
   if (!publicIds.length) return;
-  const deletePromises = publicIds.map((id) =>
-    cloudinary.uploader.destroy(id, { resource_type: "video" }).catch(() => null)
+  await Promise.all(
+    publicIds.map((id) => cloudinary.uploader.destroy(id, { resource_type: "video" }).catch(() => null))
   );
-  await Promise.all(deletePromises);
 };
 
-// --- HELPER: Sanitize Quiz Objects ---
-const sanitizeQuiz = (quizArray) => {
-  if (!Array.isArray(quizArray)) return [];
-  return quizArray.map((q) => ({
-    ...q,
-    question: typeof q.question === "string" ? q.question.trim() : q.question,
-    answer: typeof q.answer === "string" ? q.answer.trim() : q.answer,
-    explanation: typeof q.explanation === "string" ? q.explanation.trim() : q.explanation,
-    options: Array.isArray(q.options)
-      ? q.options.map((opt) => (typeof opt === "string" ? opt.trim() : opt))
-      : [],
-  }));
+const parseJsonArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 };
+
+const sanitizeQuiz = (quizArray) =>
+  parseJsonArray(quizArray)
+    .filter((q) => q && typeof q.question === "string" && q.question.trim())
+    .map((q) => ({
+      question: q.question.trim(),
+      answer: typeof q.answer === "string" ? q.answer.trim() : String(q.answer ?? "").trim(),
+      explanation: typeof q.explanation === "string" ? q.explanation.trim() : "",
+      options: Array.isArray(q.options)
+        ? q.options.map((opt) => (typeof opt === "string" ? opt.trim() : String(opt))).filter(Boolean)
+        : [],
+    }));
 
 /**
- * @desc    Create a new Lesson (Supports multipart/form-data & JSON)
- * @route   POST /api/lessons
+ * The create form sends the subject *name*, but Lesson.subject is an ObjectId, so
+ * lesson creation threw a CastError. Accept either an id or a name (+ level).
+ */
+const resolveSubjectId = async (subject, level) => {
+  if (!subject) return undefined;
+  if (isValidId(subject)) return subject;
+  const query = { name: exactInsensitive(subject) };
+  if (level) query.level = exactInsensitive(level);
+  const found = (await Subject.findOne(query).select("_id")) || (await Subject.findOne({ name: query.name }).select("_id"));
+  return found?._id;
+};
+
+// Only these fields can be written to a lesson from a request.
+const pickLessonFields = async (body = {}) => {
+  const out = {};
+  if (body.level !== undefined) out.level = String(body.level).trim();
+  if (body.strand !== undefined) out.strand = String(body.strand).trim();
+  if (body.lessonName !== undefined) out.lessonName = String(body.lessonName).trim();
+  if (body.lessonNumber !== undefined && body.lessonNumber !== "") out.lessonNumber = Number(body.lessonNumber);
+  if (body.subStrand !== undefined) out.subStrand = body.subStrand;
+  if (body.subject !== undefined && body.subject !== "") {
+    const subjectId = await resolveSubjectId(body.subject, body.level);
+    if (subjectId) out.subject = subjectId;
+  }
+  return out;
+};
+
+const uploadAll = async (files, titles, defaultTitle, uploadedPublicIds) => {
+  const videoTitles = parseJsonArray(titles);
+  const out = [];
+  for (let i = 0; i < files.length; i++) {
+    const cloud = await uploadToCloudinary(files[i].path);
+    uploadedPublicIds.push(cloud.public_id);
+    out.push({ ...cloud, title: String(videoTitles[i] || `${defaultTitle} ${i + 1}`).trim() });
+  }
+  return out;
+};
+
+// --- CONTROLLERS ------------------------------------------------------------
+
+/**
+ * @route   POST /api/lessons   (admin, multipart/form-data)
  */
 export const createLesson = async (req, res) => {
   const uploadedPublicIds = [];
+  const files = req.files || [];
 
   try {
-    const { titles, quiz, ...otherFields } = req.body;
+    const fields = await pickLessonFields(req.body);
 
-    // 1. Safely Parse Video Titles
-    let videoTitles = [];
-    if (typeof titles === "string") {
-      try { videoTitles = JSON.parse(titles); } catch { videoTitles = []; }
-    } else if (Array.isArray(titles)) {
-      videoTitles = titles;
+    if (!fields.subStrand || !isValidId(fields.subStrand)) {
+      return res.status(400).json({ success: false, msg: "Please choose a valid sub-strand." });
+    }
+    if (!fields.lessonName) {
+      return res.status(400).json({ success: false, msg: "Lesson name is required." });
     }
 
-    // 2. Upload Video Files to Cloudinary
-    let videoData = [];
-    if (req.files && req.files.length > 0) {
-      for (let i = 0; i < req.files.length; i++) {
-        const cloud = await uploadToCloudinary(req.files[i].buffer);
-        uploadedPublicIds.push(cloud.public_id);
-        videoData.push({
-          ...cloud,
-          title: videoTitles[i] || `Video ${i + 1}`,
-        });
-      }
-    }
+    const videos = await uploadAll(files, req.body.titles, "Video", uploadedPublicIds);
 
-    // 3. Safely Parse & Sanitize Quiz Data
-    let rawQuiz = [];
-    if (typeof quiz === "string") {
-      try { rawQuiz = JSON.parse(quiz); } catch { rawQuiz = []; }
-    } else if (Array.isArray(quiz)) {
-      rawQuiz = quiz;
-    }
-    const sanitizedQuiz = sanitizeQuiz(rawQuiz);
-
-    // 4. Create Lesson Document
     const lesson = await Lesson.create({
-      ...otherFields,
-      videos: videoData,
-      quiz: sanitizedQuiz,
+      ...fields,
+      videos,
+      quiz: sanitizeQuiz(req.body.quiz),
     });
 
-    // 5. Append Lesson ID to parent SubStrand array if subStrand is an ObjectId
-    if (otherFields.subStrand && mongoose.Types.ObjectId.isValid(otherFields.subStrand)) {
-      await SubStrand.findByIdAndUpdate(otherFields.subStrand, {
-        $addToSet: { lessons: lesson._id },
-      }).catch(() => null); // Silent skip if subStrand is stored as a raw String name
-    }
+    await SubStrand.findByIdAndUpdate(fields.subStrand, { $addToSet: { lessons: lesson._id } }).catch(
+      () => null
+    );
 
     return res.status(201).json({ success: true, data: lesson });
   } catch (err) {
-    // Rollback uploaded Cloudinary files if DB write fails
     await rollbackCloudinaryUploads(uploadedPublicIds);
-    return res.status(500).json({ success: false, msg: "Creation failed", error: err.message });
+    const status = err.name === "ValidationError" || err.name === "CastError" ? 400 : 500;
+    if (status === 500) console.error("Create lesson failed:", err);
+    return res.status(status).json({ success: false, msg: "Creation failed", error: err.message });
+  } finally {
+    await removeTempFiles(files);
   }
 };
 
 /**
- * @desc    Get All Lessons
- * @route   GET /api/lessons
+ * @route   GET /api/lessons   (public)  optional ?subject=<name|id>&level=<level>
  */
 export const getLessons = async (req, res) => {
-  try {
-    const lessons = await Lesson.find()
-      .populate("subject", "name level")
-      .populate("subStrand", "title code")
-      .sort({ createdAt: -1 });
+  const filter = {};
+  const { subject } = req.query;
 
-    return res.status(200).json({ success: true, count: lessons.length, data: lessons });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+  if (subject) {
+    // Subject is stored as an id; look up ids by name. Lessons with no subject
+    // (older records) are kept so nothing disappears from the learner's view.
+    const ids = isValidId(subject)
+      ? [subject]
+      : (await Subject.find({ name: exactInsensitive(subject) }).select("_id").lean()).map((s) => s._id);
+    filter.$or = [{ subject: { $in: ids } }, { subject: { $exists: false } }, { subject: null }];
   }
+
+  const lessons = await Lesson.find(filter)
+    .populate("subject", "name level")
+    .populate("subStrand", "title code")
+    .sort({ createdAt: -1 });
+
+  return res.status(200).json({ success: true, count: lessons.length, data: lessons });
 };
 
 /**
- * @desc    Get Lesson by ID
- * @route   GET /api/lessons/:id
+ * @route   GET /api/lessons/:id   (public)
  */
 export const getLessonById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { userId } = req.query; // optional: pass ?userId=... from frontend
+  const { id } = req.params;
+  const { userId } = req.query;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
-    }
-
-    const lesson = await Lesson.findById(id)
-      .populate("subject", "name level")
-      .populate("subStrand", "title code");
-
-    if (!lesson) {
-      return res.status(404).json({ success: false, msg: "Lesson not found" });
-    }
-
-    // Optional: Check user's server-side progress record
-    let isCompleted = false;
-    if (userId) {
-      const progress = await Progress.findOne({ user: userId, lessonNumber: lesson.lessonNumber });
-      if (progress && progress.score > 0) {
-        isCompleted = true;
-      }
-    }
-
-    return res.status(200).json({ 
-      success: true, 
-      data: {
-        ...lesson.toObject(),
-        isCompleted
-      } 
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+  if (!isValidId(id)) {
+    return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
   }
+
+  const lesson = await Lesson.findById(id)
+    .populate("subject", "name level")
+    .populate("subStrand", "title code");
+
+  if (!lesson) return res.status(404).json({ success: false, msg: "Lesson not found" });
+
+  let isCompleted = false;
+  if (userId && isValidId(userId)) {
+    const progress = await Progress.findOne({ user: userId, lesson: lesson._id, score: { $gt: 0 } })
+      .select("_id")
+      .lean();
+    isCompleted = Boolean(progress);
+  }
+
+  return res.status(200).json({ success: true, data: { ...lesson.toObject(), isCompleted } });
 };
 
 /**
- * @desc    Update Lesson details or append new videos
- * @route   PUT /api/lessons/:id
+ * @route   PUT /api/lessons/:id   (admin, multipart/form-data)
+ * Updates text/quiz, renames existing videos, and appends any new videos.
  */
 export const updateLesson = async (req, res) => {
   const uploadedPublicIds = [];
+  const files = req.files || [];
 
   try {
     const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
     }
 
-    const { titles, quiz, ...otherFields } = req.body;
+    const lesson = await Lesson.findById(id);
+    if (!lesson) return res.status(404).json({ success: false, msg: "Lesson not found" });
 
-    // 1. Process New Video Uploads
-    let newVideos = [];
-    if (req.files && req.files.length > 0) {
-      let videoTitles = [];
-      if (typeof titles === "string") {
-        try { videoTitles = JSON.parse(titles); } catch { videoTitles = []; }
-      } else if (Array.isArray(titles)) {
-        videoTitles = titles;
-      }
+    const fields = await pickLessonFields(req.body);
+    if (fields.subStrand !== undefined && !isValidId(fields.subStrand)) delete fields.subStrand;
+    const oldSubStrand = lesson.subStrand ? String(lesson.subStrand) : null;
 
-      for (let i = 0; i < req.files.length; i++) {
-        const cloud = await uploadToCloudinary(req.files[i].buffer);
-        uploadedPublicIds.push(cloud.public_id);
-        newVideos.push({
-          url: cloud.url,
-          public_id: cloud.public_id,
-          title: videoTitles[i] || `New Lesson Video ${i + 1}`,
-        });
-      }
+    Object.assign(lesson, fields);
+    if (req.body.quiz !== undefined) lesson.quiz = sanitizeQuiz(req.body.quiz);
+
+    // Titles of existing videos edited in the form (previously ignored).
+    for (const v of parseJsonArray(req.body.existingVideos)) {
+      const existing = v?._id && lesson.videos.id(v._id);
+      if (existing && typeof v.title === "string" && v.title.trim()) existing.title = v.title.trim();
     }
 
-    const updateData = { ...otherFields };
+    const newVideos = await uploadAll(files, req.body.titles, "New Lesson Video", uploadedPublicIds);
+    newVideos.forEach((v) => lesson.videos.push(v));
 
-    // 2. Process Quiz updates if present
-    if (quiz !== undefined) {
-      let parsedQuiz = [];
-      if (typeof quiz === "string") {
-        try { parsedQuiz = JSON.parse(quiz); } catch { parsedQuiz = []; }
-      } else if (Array.isArray(quiz)) {
-        parsedQuiz = quiz;
-      }
-      updateData.quiz = sanitizeQuiz(parsedQuiz);
+    await lesson.save();
+
+    // Keep SubStrand.lessons in sync if the lesson moved.
+    const newSubStrand = lesson.subStrand ? String(lesson.subStrand) : null;
+    if (oldSubStrand !== newSubStrand) {
+      if (oldSubStrand) await SubStrand.findByIdAndUpdate(oldSubStrand, { $pull: { lessons: lesson._id } }).catch(() => null);
+      if (newSubStrand) await SubStrand.findByIdAndUpdate(newSubStrand, { $addToSet: { lessons: lesson._id } }).catch(() => null);
     }
 
-    const updateQuery = { $set: updateData };
-    if (newVideos.length > 0) {
-      updateQuery.$push = { videos: { $each: newVideos } };
-    }
-
-    const updatedLesson = await Lesson.findByIdAndUpdate(id, updateQuery, {
-      new: true,
-      runValidators: true,
-    })
+    const updatedLesson = await Lesson.findById(id)
       .populate("subject", "name level")
       .populate("subStrand", "title code");
-
-    if (!updatedLesson) {
-      await rollbackCloudinaryUploads(uploadedPublicIds);
-      return res.status(404).json({ success: false, msg: "Lesson not found" });
-    }
 
     return res.status(200).json({ success: true, data: updatedLesson });
   } catch (err) {
     await rollbackCloudinaryUploads(uploadedPublicIds);
-    return res.status(500).json({ success: false, error: err.message });
+    const status = err.name === "ValidationError" || err.name === "CastError" ? 400 : 500;
+    if (status === 500) console.error("Update lesson failed:", err);
+    return res.status(status).json({ success: false, msg: "Update failed", error: err.message });
+  } finally {
+    await removeTempFiles(files);
   }
 };
 
-
-
-
 /**
- * @desc    Delete single Video from a Lesson
- * @route   DELETE /api/lessons/:id/videos/:videoId
+ * @route   DELETE /api/lessons/:id/videos/:videoId   (admin)
  */
 export const deleteVideoFromLesson = async (req, res) => {
-  try {
-    const { id, videoId } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
-    }
-
-    const lesson = await Lesson.findById(id);
-    if (!lesson) {
-      return res.status(404).json({ success: false, msg: "Lesson not found" });
-    }
-
-    const video = lesson.videos.id(videoId);
-    if (!video) {
-      return res.status(404).json({ success: false, msg: "Video not found in this lesson" });
-    }
-
-    // Remove video asset from Cloudinary
-    if (video.public_id) {
-      await cloudinary.uploader.destroy(video.public_id, { resource_type: "video" });
-    }
-
-    lesson.videos.pull(videoId);
-    await lesson.save();
-
-    return res.status(200).json({ success: true, msg: "Video deleted successfully", data: lesson });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+  const { id, videoId } = req.params;
+  if (!isValidId(id)) {
+    return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
   }
+
+  const lesson = await Lesson.findById(id);
+  if (!lesson) return res.status(404).json({ success: false, msg: "Lesson not found" });
+
+  const video = lesson.videos.id(videoId);
+  if (!video) return res.status(404).json({ success: false, msg: "Video not found in this lesson" });
+
+  if (video.public_id) {
+    await cloudinary.uploader.destroy(video.public_id, { resource_type: "video" }).catch((e) =>
+      console.warn("Cloudinary delete failed:", e.message)
+    );
+  }
+
+  lesson.videos.pull(videoId);
+  await lesson.save();
+
+  return res.status(200).json({ success: true, msg: "Video deleted successfully", data: lesson });
 };
 
 /**
- * @desc    Delete Full Lesson & cleanup associated videos & SubStrand refs
- * @route   DELETE /api/lessons/:id
+ * @route   DELETE /api/lessons/:id   (admin)
  */
 export const deleteLesson = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
-    }
-
-    const lesson = await Lesson.findById(id);
-    if (!lesson) {
-      return res.status(404).json({ success: false, msg: "Lesson not found" });
-    }
-
-    // 1. Delete all videos from Cloudinary
-    if (lesson.videos && lesson.videos.length > 0) {
-      const publicIds = lesson.videos.map((v) => v.public_id).filter(Boolean);
-      await rollbackCloudinaryUploads(publicIds);
-    }
-
-    // 2. Remove Lesson ID reference from SubStrand collection
-    if (lesson.subStrand && mongoose.Types.ObjectId.isValid(lesson.subStrand)) {
-      await SubStrand.findByIdAndUpdate(lesson.subStrand, {
-        $pull: { lessons: lesson._id },
-      }).catch(() => null);
-    }
-
-    await lesson.deleteOne();
-
-    return res.status(200).json({ success: true, msg: "Lesson deleted successfully" });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+  const { id } = req.params;
+  if (!isValidId(id)) {
+    return res.status(400).json({ success: false, msg: "Invalid Lesson ID format" });
   }
+
+  const lesson = await Lesson.findById(id);
+  if (!lesson) return res.status(404).json({ success: false, msg: "Lesson not found" });
+
+  const publicIds = (lesson.videos || []).map((v) => v.public_id).filter(Boolean);
+  await rollbackCloudinaryUploads(publicIds);
+
+  if (lesson.subStrand) {
+    await SubStrand.findByIdAndUpdate(lesson.subStrand, { $pull: { lessons: lesson._id } }).catch(() => null);
+  }
+
+  await Progress.updateMany({ lesson: lesson._id }, { $unset: { lesson: "" } }).catch(() => null);
+  await lesson.deleteOne();
+
+  return res.status(200).json({ success: true, msg: "Lesson deleted successfully" });
 };

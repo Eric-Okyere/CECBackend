@@ -63,8 +63,31 @@ const userSchema = new mongoose.Schema(
     },
     
     isVerified: { type: Boolean, default: false },
+
+    // Email verification. These fields were previously missing from the schema, so
+    // Mongoose silently discarded the codes and verification could never succeed.
+    // The code is stored as a SHA-256 hash, never in plain text.
+    verificationCode: { type: String, select: false },
+    verificationExpires: { type: Date, select: false },
+    verificationAttempts: { type: Number, default: 0, select: false },
+    verificationSentAt: { type: Date, select: false },
   },
   { timestamps: true }
 );
+
+// Never send secrets to the browser, no matter which controller returns the user.
+const SECRET_FIELDS = [
+  "password",
+  "verificationCode",
+  "verificationExpires",
+  "verificationAttempts",
+  "verificationSentAt",
+];
+const stripSecrets = (doc, ret) => {
+  SECRET_FIELDS.forEach((f) => delete ret[f]);
+  return ret;
+};
+userSchema.set("toJSON", { transform: stripSecrets });
+userSchema.set("toObject", { transform: stripSecrets });
 
 export default mongoose.model("User", userSchema);

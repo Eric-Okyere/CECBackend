@@ -1,512 +1,565 @@
+import crypto from "crypto";
+import mongoose from "mongoose";
 import { OAuth2Client } from "google-auth-library";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { sendVerificationEmail } from "../services/emailService.js";
+import { canActForUser } from "../middleware/authMiddleware.js";
 import User from "../model/User.js";
+import Progress from "../model/Progress.js";
+import Timetable from "../model/Timetable.js";
+import { exactInsensitive } from "../utils/escapeRegex.js";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-export const googleLogin = async (req, res) => {
-  const { token } = req.body;
+const MIN_PASSWORD_LENGTH = 8;
+const CODE_TTL_MS = 10 * 60 * 1000;
+const RESEND_COOLDOWN_MS = 60 * 1000;
+const MAX_CODE_ATTEMPTS = 5;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SELF_SERVICE_ROLES = ["learner", "parent"];
+const ALL_ROLES = ["learner", "parent", "child"];
+const GENDERS = ["Male", "Female", ""];
 
+// --- helpers ---------------------------------------------------------------
+
+const signToken = (userId, expiresIn) =>
+  jwt.sign({ id: String(userId) }, process.env.JWT_SECRET, { expiresIn });
+
+const normalizeEmail = (email) =>
+  typeof email === "string" ? email.trim().toLowerCase() : "";
+
+// Exact (lower-case) match first; then a case-insensitive fallback so older
+// mixed-case records are still found.
+const findByEmail = async (email, select = "") => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  return (
+    (await User.findOne({ email: normalized }).select(select)) ||
+    (await User.findOne({ email: exactInsensitive(normalized) }).select(select))
+  );
+};
+
+const hashCode = (code) => crypto.createHash("sha256").update(String(code)).digest("hex");
+
+const randomPassword = () => bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
+
+const issueVerificationCode = async (user) => {
+  const code = crypto.randomInt(100000, 1000000).toString();
+  user.verificationCode = hashCode(code);
+  user.verificationExpires = new Date(Date.now() + CODE_TTL_MS);
+  user.verificationAttempts = 0;
+  user.verificationSentAt = new Date();
+  await user.save();
+  return code;
+};
+
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(String(id || ""));
+
+// Only these keys may be written into learningProfile by the user themself.
+// isPaid / xp / streak are controlled by the server (payments and quizzes).
+const pickLearningProfile = (lp = {}) => {
+  const out = {};
+  if (typeof lp.level === "string") out.level = lp.level.trim();
+  if (lp.age !== undefined && lp.age !== null && lp.age !== "") {
+    const age = Number(lp.age);
+    if (Number.isFinite(age) && age > 0 && age < 120) out.age = age;
+  }
+  return out;
+};
+
+const pickParentDetails = (pd = {}) => {
+  const out = {};
+  if (typeof pd.phoneNumber === "string") out.phoneNumber = pd.phoneNumber.trim().slice(0, 30);
+  if (typeof pd.relationship === "string") out.relationship = pd.relationship.trim().slice(0, 50);
+  return out;
+};
+
+const pickDisabilityProfile = (dp = {}) => {
+  const out = {};
+  if (typeof dp.hasDisability === "boolean") out.hasDisability = dp.hasDisability;
+  if (typeof dp.type === "string") out.type = dp.type;
+  if (typeof dp.details === "string") out.details = dp.details.slice(0, 1000);
+  if (typeof dp.accommodationsNeeded === "string")
+    out.accommodationsNeeded = dp.accommodationsNeeded.slice(0, 1000);
+  return out;
+};
+
+const mergeSub = (doc, key, patch) => {
+  const current = doc[key]?.toObject ? doc[key].toObject() : doc[key] || {};
+  doc[key] = { ...current, ...patch };
+};
+
+// --- Google sign-in -------------------------------------------------------
+
+export const googleLogin = async (req, res) => {
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ msg: "Missing Google credential." });
+
+  let payload;
   try {
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
-
-    const { name, family_name, email, sub, picture } = ticket.getPayload();
-
-    let user = await User.findOne({ email });
-    let isNewUser = false;
-
-    if (!user) {
-      isNewUser = true; // 👈 Mark as a newly registered user
-      user = await User.create({
-        name: name || "Google User",
-        surname: family_name || "",
-        email,
-        googleId: sub,
-        picture: picture,
-        isVerified: true,
-        role: "learner",
-        password: await bcrypt.hash(Math.random().toString(36), 10),
-      });
-    } else {
-      // Existing user: update picture & googleId without triggering full doc validation
-      user = await User.findByIdAndUpdate(
-        user._id,
-        { $set: { picture, googleId: sub } },
-        { new: true, runValidators: false }
-      );
-    }
-
-    const appToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-
-    // Send back isNewUser
-    res.status(200).json({ token: appToken, user, isNewUser });
+    payload = ticket.getPayload();
   } catch (error) {
-    console.error("Google Auth Error:", error);
-    res.status(400).json({ msg: "Google authentication failed" });
+    console.error("Google Auth Error:", error.message);
+    return res.status(400).json({ msg: "Google authentication failed" });
   }
-};
 
-// In authController.js -> addChild
-// In authController.js -> addChild
-export const addChild = async (req, res) => {
-  try {
-    // 1. Extract values from request body (including gender & disabilityProfile)
-    const { 
-      parentId: bodyParentId, 
-      firstName, 
-      lastName, 
-      age, 
-      level, 
-      gender, 
-      disabilityProfile 
-    } = req.body;
+  const { name, family_name, email, sub, picture, email_verified } = payload || {};
+  if (!email || email_verified === false) {
+    return res.status(400).json({ msg: "Your Google email address is not verified." });
+  }
 
-    // 2. Prioritize logged-in user from auth middleware, fallback to body
-    const parentId = req.user?._id || bodyParentId;
+  let user = await findByEmail(email);
+  let isNewUser = false;
 
-    if (!parentId) {
-      return res.status(400).json({ msg: "Parent ID is required to link child." });
-    }
-
-    // 3. Verify parent exists
-    const parent = await User.findById(parentId);
-    if (!parent) {
-      return res.status(404).json({ msg: "Parent account not found." });
-    }
-
-    // 4. Ensure parent role is set to "parent"
-    if (parent.role !== "parent") {
-      parent.role = "parent";
-      await parent.save();
-    }
-
-    // 5. Create Child with gender and disabilityProfile attached
-    const newChild = await User.create({
-      name: firstName,
-      surname: lastName,
-      gender: gender || "", // 👈 Store gender ("Male", "Female", or "")
-      role: "child",
-      parentId: parent._id, // 👈 Explicitly attach parent's MongoDB ID
+  if (!user) {
+    isNewUser = true;
+    user = await User.create({
+      name: name || "Google User",
+      surname: family_name || "-",
+      email: normalizeEmail(email),
+      googleId: sub,
+      picture: picture || "",
       isVerified: true,
-      password: await bcrypt.hash(Math.random().toString(36), 10),
-      disabilityProfile: disabilityProfile || { // 👈 Pass disability profile
-        hasDisability: false,
-        type: "None",
-        details: "",
-        accommodationsNeeded: ""
-      },
-      learningProfile: {
-        age: Number(age),
-        level,
-        xp: 0,
-        isPaid: false
-      }
+      role: "learner",
+      password: await randomPassword(),
     });
+  } else {
+    const update = { picture: picture || user.picture, googleId: sub, isVerified: true };
 
-    res.status(201).json(newChild);
-  } catch (error) {
-    console.error("Add Child Error:", error);
-    res.status(500).json({ msg: "Failed to create child profile", error: error.message });
+    // If someone registered this email with a password but never verified it, they
+    // did not prove they own the inbox. Google just proved the real owner does, so
+    // the unverified password is thrown away (prevents account pre-hijacking).
+    if (!user.isVerified) update.password = await randomPassword();
+
+    await User.updateOne({ _id: user._id }, { $set: update });
+    user = await User.findById(user._id);
   }
+
+  const appToken = signToken(user._id, "7d");
+  res.status(200).json({ token: appToken, user, isNewUser });
 };
+
+// --- Email + password ------------------------------------------------------
 
 export const register = async (req, res) => {
-  try {
-    const { name, surname, email, password } = req.body;
-    
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ msg: "Email already registered." });
+  const { name, surname, password } = req.body || {};
+  const email = normalizeEmail(req.body?.email);
 
-    const vCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const hashed = await bcrypt.hash(password.toString(), 10);
+  if (!name?.trim() || !surname?.trim() || !email || !password) {
+    return res.status(400).json({ msg: "Please fill in all fields." });
+  }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ msg: "Please enter a valid email address." });
+  }
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return res
+      .status(400)
+      .json({ msg: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+  }
 
-    const user = await User.create({ 
-      name, 
-      surname, 
-      email, 
+  const hashed = await bcrypt.hash(String(password), 10);
+  let user = await findByEmail(email);
+
+  if (user && user.isVerified) {
+    return res.status(400).json({ msg: "Email already registered. Please log in." });
+  }
+
+  if (user) {
+    // Unverified leftover registration: let the person try again instead of
+    // being stuck forever with an account they can't verify.
+    user.name = name.trim();
+    user.surname = surname.trim();
+    user.password = hashed;
+  } else {
+    user = new User({
+      name: name.trim(),
+      surname: surname.trim(),
+      email,
       password: hashed,
       role: "learner",
-      verificationCode: vCode,
-      verificationExpires: Date.now() + 10 * 60 * 1000
     });
+  }
 
-    try {
-      await sendVerificationEmail(email, vCode);
-      res.status(201).json({ msg: "Verification code sent to email." });
-    } catch (mailError) {
-      res.status(500).json({ msg: "Account created, but email failed." });
-    }
-  } catch (error) {
-    res.status(500).json({ msg: error.message });
+  const code = await issueVerificationCode(user);
+
+  try {
+    await sendVerificationEmail(email, code);
+    return res.status(201).json({ msg: "Verification code sent to email.", emailSent: true });
+  } catch (mailError) {
+    console.error("Verification email failed:", mailError.message);
+    // Account exists; the person can use "Resend" on the verify page.
+    return res.status(201).json({
+      msg: "Account created, but we couldn't send the email. Use 'Resend' on the next page.",
+      emailSent: false,
+    });
   }
 };
 
 export const verifyEmail = async (req, res) => {
-  try {
-    const { email, code } = req.body;
-    const user = await User.findOne({ email });
+  const email = normalizeEmail(req.body?.email);
+  const code = String(req.body?.code || "").trim();
 
-    if (!user) return res.status(404).json({ msg: "User not found" });
-    if (user.isVerified) return res.status(400).json({ msg: "Account already verified" });
-
-    if (user.verificationCode !== code) {
-      return res.status(400).json({ msg: "Invalid verification code" });
-    }
-
-    if (user.verificationExpires < Date.now()) {
-      return res.status(400).json({ msg: "Code has expired. Please request a new one." });
-    }
-
-    user.isVerified = true;
-    user.verificationCode = undefined;
-    user.verificationExpires = undefined;
-    await user.save();
-
-    res.json({ msg: "Email verified successfully! you can now log in." });
-  } catch (error) {
-    res.status(500).json({ msg: error.message });
+  if (!email || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ msg: "Enter your email and the 6-digit code." });
   }
+
+  const user = await findByEmail(
+    email,
+    "+verificationCode +verificationExpires +verificationAttempts"
+  );
+
+  // Same message whether or not the account exists (no email probing).
+  const invalid = () => res.status(400).json({ msg: "Invalid or expired verification code." });
+
+  if (!user) return invalid();
+  if (user.isVerified) return res.status(400).json({ msg: "Account already verified. Please log in." });
+  if (!user.verificationCode || !user.verificationExpires) return invalid();
+
+  if (user.verificationExpires.getTime() < Date.now()) {
+    return res.status(400).json({ msg: "Code has expired. Please request a new one." });
+  }
+  if ((user.verificationAttempts || 0) >= MAX_CODE_ATTEMPTS) {
+    return res.status(429).json({ msg: "Too many wrong attempts. Please request a new code." });
+  }
+
+  const expected = Buffer.from(user.verificationCode, "hex");
+  const actual = Buffer.from(hashCode(code), "hex");
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    user.verificationAttempts = (user.verificationAttempts || 0) + 1;
+    await user.save();
+    return invalid();
+  }
+
+  user.isVerified = true;
+  user.verificationCode = undefined;
+  user.verificationExpires = undefined;
+  user.verificationAttempts = 0;
+  await user.save();
+
+  res.json({ msg: "Email verified successfully! You can now log in." });
 };
 
-export const getChild = async (req, res) => {
-  try {
-    const children = await User.find({ parentId: req.params.parentId })
-      .populate('parentId', 'email parentDetails'); 
-      
-    res.json(children);
-  } catch (error) {
-    res.status(500).json({ msg: "Server Error" });
+export const resendVerification = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const generic = { msg: "If that account exists and is unverified, a new code has been sent." };
+
+  if (!email) return res.status(400).json({ msg: "Email is required." });
+
+  const user = await findByEmail(email, "+verificationSentAt");
+  if (!user || user.isVerified) return res.json(generic);
+
+  const lastSent = user.verificationSentAt?.getTime() || 0;
+  const wait = Math.ceil((lastSent + RESEND_COOLDOWN_MS - Date.now()) / 1000);
+  if (wait > 0) {
+    return res.status(429).json({ msg: `Please wait ${wait}s before requesting another code.` });
   }
+
+  const code = await issueVerificationCode(user);
+  try {
+    await sendVerificationEmail(user.email, code);
+  } catch (mailError) {
+    console.error("Resend verification failed:", mailError.message);
+    return res.status(502).json({ msg: "We couldn't send the email right now. Try again shortly." });
+  }
+  res.json(generic);
 };
 
 export const login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ msg: "User not found" });
+  const email = normalizeEmail(req.body?.email);
+  const { password } = req.body || {};
+  const badCreds = () => res.status(400).json({ msg: "Wrong email or password" });
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ msg: "Wrong email or password" });
+  if (!email || !password) return badCreds();
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    res.json({ token, user });
-  } catch (error) {
-    res.status(500).json({ msg: error.message });
+  const user = await findByEmail(email, "+password");
+  if (!user) return badCreds();
+
+  const isMatch = await bcrypt.compare(String(password), user.password);
+  if (!isMatch) return badCreds();
+
+  if (!user.isVerified) {
+    return res.status(403).json({
+      msg: "Please verify your email before logging in.",
+      needsVerification: true,
+    });
   }
+
+  const token = signToken(user._id, "1d");
+  res.json({ token, user }); // password is stripped by the schema's toJSON
 };
+
+// --- Parent / child --------------------------------------------------------
+
+export const addChild = async (req, res) => {
+  const { firstName, lastName, age, level, gender, disabilityProfile } = req.body || {};
+
+  // A parent can only add children to their own account. Admins may specify a parent.
+  const parentId =
+    req.user.admin && req.body?.parentId && isValidId(req.body.parentId)
+      ? req.body.parentId
+      : req.userId;
+
+  if (!firstName?.trim() || !lastName?.trim()) {
+    return res.status(400).json({ msg: "Child's first and last name are required." });
+  }
+
+  const parent = await User.findById(parentId);
+  if (!parent) return res.status(404).json({ msg: "Parent account not found." });
+  if (parent.role === "child") {
+    return res.status(400).json({ msg: "A child profile cannot have children." });
+  }
+
+  if (parent.role !== "parent") {
+    parent.role = "parent";
+    await parent.save();
+  }
+
+  const childAge = Number(age);
+  const newChild = await User.create({
+    name: firstName.trim(),
+    surname: lastName.trim(),
+    gender: GENDERS.includes(gender) ? gender : "",
+    role: "child",
+    parentId: parent._id,
+    isVerified: true,
+    password: await randomPassword(),
+    disabilityProfile: {
+      hasDisability: false,
+      type: "None",
+      details: "",
+      accommodationsNeeded: "",
+      ...pickDisabilityProfile(disabilityProfile),
+    },
+    learningProfile: {
+      age: Number.isFinite(childAge) && childAge > 0 ? childAge : undefined,
+      level: typeof level === "string" ? level : "",
+      xp: 0,
+      isPaid: false,
+    },
+  });
+
+  res.status(201).json(newChild);
+};
+
+export const getChild = async (req, res) => {
+  const { parentId } = req.params;
+  if (!isValidId(parentId)) return res.status(400).json({ msg: "Invalid parent id." });
+
+  if (!req.user.admin && parentId !== req.userId) {
+    return res.status(403).json({ msg: "You can only view your own children." });
+  }
+
+  const children = await User.find({ parentId }).populate(
+    "parentId",
+    "name surname email parentDetails"
+  );
+  res.json(children);
+};
+
+// --- Lessons ---------------------------------------------------------------
 
 export const unlockLesson = async (req, res) => {
-  try {
-    const { userId, lessonData } = req.body;
+  const { userId, lessonData } = req.body || {};
+  const targetId = userId || req.userId;
 
-    if (!userId || !lessonData) {
-      return res.status(400).json({ msg: "Missing User ID or Lesson Data" });
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      {
-        $addToSet: { 
-          unlockedLessons: {
-            subject: lessonData.subject,
-            level: lessonData.level,
-            subStrand: lessonData.subStrand,
-            unlockedAt: new Date()
-          } 
-        }
-      },
-      { returnDocument: 'after' }
-    ).select("-password");
-
-    if (!updatedUser) {
-      return res.status(404).json({ msg: "User not found" });
-    }
-
-    res.status(200).json({ 
-      msg: "Lesson unlocked successfully", 
-      unlockedLessons: updatedUser.unlockedLessons 
-    });
-  } catch (error) {
-    console.error("Unlock Lesson Error:", error);
-    res.status(500).json({ msg: "Server Error" });
+  if (!lessonData) return res.status(400).json({ msg: "Missing lesson data" });
+  if (!(await canActForUser(req, targetId))) {
+    return res.status(403).json({ msg: "You do not have access to this account." });
   }
+
+  const entry = {
+    subject: String(lessonData.subject || "").slice(0, 200),
+    level: String(lessonData.level || "").slice(0, 50),
+    subStrand: String(lessonData.subStrand || "").slice(0, 300),
+  };
+
+  const updatedUser = await User.findById(targetId).select("unlockedLessons");
+  if (!updatedUser) return res.status(404).json({ msg: "User not found" });
+
+  // Only add if the same subject/level/subStrand isn't already unlocked
+  // ($addToSet never matched before because unlockedAt differs every time).
+  const already = updatedUser.unlockedLessons.some(
+    (u) => u.subject === entry.subject && u.level === entry.level && u.subStrand === entry.subStrand
+  );
+  if (!already) {
+    updatedUser.unlockedLessons.push({ ...entry, unlockedAt: new Date() });
+    await updatedUser.save();
+  }
+
+  res.status(200).json({
+    msg: "Lesson unlocked successfully",
+    unlockedLessons: updatedUser.unlockedLessons,
+  });
 };
 
+// --- Profiles --------------------------------------------------------------
+
 export const getAllUsers = async (req, res) => {
-  try {
-    const users = await User.find().select("-password").sort({ createdAt: -1 });
-    res.json(users);
-  } catch (error) {
-    res.status(500).json({ msg: "Server error while fetching users." });
-  }
+  const users = await User.find().sort({ createdAt: -1 });
+  res.json(users);
 };
 
 export const getUserById = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id)
-      .populate("parentId", "name surname email parentDetails")
-      .select("-password");
-      
-    if (!user) return res.status(404).json({ msg: "User not found" });
-    res.json(user);
-  } catch (error) {
-    res.status(500).send("Server Error");
-  }
+  const { id } = req.params;
+  if (!isValidId(id)) return res.status(400).json({ msg: "Invalid user id." });
+
+  const user = await User.findById(id).populate("parentId", "name surname email parentDetails");
+  if (!user) return res.status(404).json({ msg: "User not found" });
+  res.json(user);
 };
-
-// In authController.js -> updateProfile:
-
-
 
 export const updateProfile = async (req, res) => {
-  try {
-    const userId = req.params.id || req.params.userId;
+  const userId = req.params.id;
+  const {
+    role, name, surname, acceptedTerms, acceptedTermsAt,
+    learningProfile, parentDetails, disabilityProfile, gender,
+  } = req.body || {};
 
-    const {
-      role,
-      name,
-      surname,
-      acceptedTerms,
-      acceptedTermsAt,
-      learningProfile,
-      parentDetails,
-      disabilityProfile,
-      gender,
-    } = req.body;
+  const user = await User.findById(userId);
+  if (!user) return res.status(404).json({ msg: "User not found." });
 
-    // 1. Find user by ID
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ msg: "User not found." });
+  if (typeof name === "string" && name.trim()) user.name = name.trim();
+  if (typeof surname === "string" && surname.trim()) user.surname = surname.trim();
+
+  // Self-service role changes are limited to learner <-> parent, and never for child profiles.
+  if (role !== undefined && user.role !== "child") {
+    if (!SELF_SERVICE_ROLES.includes(role)) {
+      return res.status(400).json({ msg: "Invalid role." });
     }
-
-    // 2. Update basic/root fields if provided
-    if (name) user.name = name;
-    if (surname) user.surname = surname;
-    if (role) user.role = role;
-    if (acceptedTerms !== undefined) user.acceptedTerms = acceptedTerms;
-    if (acceptedTermsAt) user.acceptedTermsAt = acceptedTermsAt;
-
-    // Handle gender (support both root-level and inside learningProfile)
-    if (gender) {
-      user.gender = gender;
-    } else if (learningProfile?.gender) {
-      user.gender = learningProfile.gender;
-    }
-
-    // 3. Merge nested profiles safely (preserves existing fields inside sub-documents)
-    if (learningProfile) {
-      user.learningProfile = {
-        ...user.learningProfile?.toObject?.() || user.learningProfile,
-        ...learningProfile,
-      };
-    }
-
-    if (parentDetails) {
-      user.parentDetails = {
-        ...user.parentDetails?.toObject?.() || user.parentDetails,
-        ...parentDetails,
-      };
-    }
-
-    if (disabilityProfile) {
-      user.disabilityProfile = {
-        ...user.disabilityProfile?.toObject?.() || user.disabilityProfile,
-        ...disabilityProfile,
-      };
-    }
-
-    // 4. Save and respond
-    await user.save();
-
-    // Convert to plain object and remove password before returning
-    const updatedUserObj = user.toObject();
-    delete updatedUserObj.password;
-
-    return res.status(200).json({
-      msg: "Profile updated successfully",
-      user: updatedUserObj,
-    });
-  } catch (error) {
-    console.error("Update Profile Error:", error);
-    return res.status(500).json({
-      msg: "Server error updating profile",
-      error: error.message,
-    });
+    user.role = role;
   }
+
+  if (acceptedTerms !== undefined) user.acceptedTerms = Boolean(acceptedTerms);
+  if (acceptedTermsAt) {
+    const d = new Date(acceptedTermsAt);
+    if (!Number.isNaN(d.getTime())) user.acceptedTermsAt = d;
+  }
+
+  const g = gender ?? learningProfile?.gender;
+  if (g !== undefined && GENDERS.includes(g)) user.gender = g;
+
+  if (learningProfile) mergeSub(user, "learningProfile", pickLearningProfile(learningProfile));
+  if (parentDetails) mergeSub(user, "parentDetails", pickParentDetails(parentDetails));
+  if (disabilityProfile) mergeSub(user, "disabilityProfile", pickDisabilityProfile(disabilityProfile));
+
+  await user.save();
+
+  return res.status(200).json({ msg: "Profile updated successfully", user });
 };
 
+// --- Admin user management ---------------------------------------------------
 
+// Builds a $set from only the fields that were actually sent.
+const buildAdminUpdate = (body = {}) => {
+  const set = {};
+  const name = body.name ?? body.firstName;
+  const surname = body.surname ?? body.lastName;
 
-export const getChildrenByParent = async (req, res) => {
-  try {
-    const { parentId } = req.params;
-
-    // Build flexible query matching string or ObjectId
-    const queryConditions = [{ parentId: parentId }];
-    if (mongoose.Types.ObjectId.isValid(parentId)) {
-      queryConditions.push({ parentId: new mongoose.Types.ObjectId(parentId) });
-    }
-
-    const children = await User.find({
-      $or: queryConditions,
-      role: "child"
-    });
-
-    res.status(200).json(children);
-  } catch (error) {
-    console.error("Get Children Error:", error);
-    res.status(500).json({ msg: "Error fetching children" });
-  }
+  if (typeof name === "string" && name.trim()) set.name = name.trim();
+  if (typeof surname === "string" && surname.trim()) set.surname = surname.trim();
+  if (typeof body.email === "string" && body.email.trim()) set.email = normalizeEmail(body.email);
+  if (body.role !== undefined) set.role = body.role;
+  if (body.isVerified !== undefined) set.isVerified = Boolean(body.isVerified);
+  if (body.admin !== undefined) set.admin = Boolean(body.admin);
+  if (body.level !== undefined) set["learningProfile.level"] = String(body.level);
+  if (body.age !== undefined && body.age !== "") set["learningProfile.age"] = Number(body.age);
+  if (body.isPaid !== undefined) set["learningProfile.isPaid"] = Boolean(body.isPaid);
+  if (body.phoneNumber !== undefined) set["parentDetails.phoneNumber"] = String(body.phoneNumber);
+  if (body.relationship !== undefined) set["parentDetails.relationship"] = String(body.relationship);
+  if (body.hasDisability !== undefined)
+    set["disabilityProfile.hasDisability"] = Boolean(body.hasDisability);
+  if (typeof body.disabilityDetails === "string")
+    set["disabilityProfile.details"] = body.disabilityDetails;
+  return set;
 };
 
-// --- UPDATED USER CONTROLLER FOR ADMIN / USER MANAGEMENT ---
-export const updateUser = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { 
-      name, 
-      surname, 
-      firstName, 
-      lastName, 
-      email,
-      role,
-      level, 
-      age, 
-      phoneNumber, 
-      relationship,
-      password,
-      isVerified,
-      hasDisability,
-      disabilityDetails
-    } = req.body;
-
-    const user = await User.findById(id);
-    if (!user) return res.status(404).json({ msg: "User not found" });
-
-    // Update Basic Information
-    if (name !== undefined) user.name = name || firstName;
-    if (surname !== undefined) user.surname = surname || lastName;
-    if (email !== undefined) user.email = email;
-    if (role !== undefined) user.role = role;
-    if (isVerified !== undefined) user.isVerified = isVerified;
-
-    // Update Password if specified
-    if (password && password.trim() !== "") {
-      user.password = await bcrypt.hash(password.toString(), 10);
-    }
-
-    // Update Disability Profile
-    if (hasDisability !== undefined) user.hasDisability = hasDisability;
-    if (disabilityDetails !== undefined) user.disabilityDetails = disabilityDetails;
-
-    // Update Learning Profile (level & age)
-    if (!user.learningProfile) user.learningProfile = {};
-    if (level !== undefined) user.learningProfile.level = level;
-    if (age !== undefined) user.learningProfile.age = Number(age);
-
-    // Update Parent Details
-    if (!user.parentDetails) user.parentDetails = {};
-    if (phoneNumber !== undefined) user.parentDetails.phoneNumber = phoneNumber;
-    if (relationship !== undefined) user.parentDetails.relationship = relationship;
-
-    await user.save();
-
-    // Exclude password from the returned object
-    const updatedUserObj = user.toObject();
-    delete updatedUserObj.password;
-
-    res.status(200).json(updatedUserObj);
-  } catch (error) {
-    console.error("Backend Update Error:", error);
-    if (error.code === 11000) {
-      return res.status(400).json({ msg: "Email address already exists." });
-    }
-    res.status(500).json({ msg: "Failed to update user info.", error: error.message });
-  }
-};
-
-
-
-export const AdminupdateUser = async (req, res) => {
+const adminUpdate = async (req, res, extra = {}) => {
   const { id } = req.params;
-  const { name, surname, email, role, level, age, phoneNumber, isVerified, admin } = req.body;
+  if (!isValidId(id)) return res.status(400).json({ msg: "Invalid user id." });
+
+  const set = { ...buildAdminUpdate(req.body), ...extra };
+
+  if (set.role !== undefined && !ALL_ROLES.includes(set.role)) {
+    return res.status(400).json({ msg: "Invalid role." });
+  }
+  if (set.email && !EMAIL_RE.test(set.email)) {
+    return res.status(400).json({ msg: "Invalid email address." });
+  }
+  // Stop an admin from accidentally locking themself (and maybe everyone) out.
+  if (id === req.userId && set.admin === false) {
+    return res.status(400).json({ msg: "You cannot remove your own admin access." });
+  }
 
   try {
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          name,
-          surname,
-          email,
-          role,
-          admin, // Updates admin status boolean
-          isVerified,
-          "learningProfile.level": level,
-          "learningProfile.age": age,
-          "parentDetails.phoneNumber": phoneNumber,
-        },
-      },
-      { new: true, runValidators: true }
-    );
-
-    if (!updatedUser) {
-      return res.status(404).json({ msg: "User not found." });
-    }
-
-    res.status(200).json(updatedUser);
+    const result = await User.updateOne({ _id: id }, { $set: set }, { runValidators: true });
+    if (!result.matchedCount) return res.status(404).json({ msg: "User not found." });
+    return res.status(200).json(await User.findById(id));
   } catch (error) {
-    console.error("Error updating user:", error);
-    res.status(500).json({ msg: "Server error updating user details." });
+    if (error.code === 11000) return res.status(400).json({ msg: "Email address already exists." });
+    throw error;
   }
 };
 
-// PATCH: Dedicated endpoint to toggle admin status
+export const updateUser = async (req, res) => {
+  const extra = {};
+  const { password } = req.body || {};
+  if (typeof password === "string" && password.trim()) {
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return res
+        .status(400)
+        .json({ msg: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
+    extra.password = await bcrypt.hash(password, 10);
+  }
+  return adminUpdate(req, res, extra);
+};
+
+export const AdminupdateUser = (req, res) => adminUpdate(req, res);
+
 export const toggleAdminStatus = async (req, res) => {
   const { id } = req.params;
-  const { admin } = req.body;
-
-  try {
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      { $set: { admin } },
-      { new: true }
-    );
-
-    if (!updatedUser) {
-      return res.status(404).json({ msg: "User not found." });
-    }
-
-    res.status(200).json(updatedUser);
-  } catch (error) {
-    console.error("Error toggling admin status:", error);
-    res.status(500).json({ msg: "Failed to update admin permission." });
+  if (typeof req.body?.admin !== "boolean") {
+    return res.status(400).json({ msg: "'admin' must be true or false." });
   }
+  if (id === req.userId && req.body.admin === false) {
+    return res.status(400).json({ msg: "You cannot remove your own admin access." });
+  }
+  if (!isValidId(id)) return res.status(400).json({ msg: "Invalid user id." });
+
+  const result = await User.updateOne({ _id: id }, { $set: { admin: req.body.admin } });
+  if (!result.matchedCount) return res.status(404).json({ msg: "User not found." });
+  res.status(200).json(await User.findById(id));
 };
 
 export const deleteUser = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const user = await User.findById(id);
-    if (!user) {
-      return res.status(404).json({ msg: "User not found" });
-    }
-
-    await User.findByIdAndDelete(id);
-
-    res.status(200).json({ msg: "User account deleted successfully" });
-  } catch (error) {
-    console.error("Delete Error:", error);
-    if (error.kind === "ObjectId") {
-      return res.status(400).json({ msg: "Invalid User ID format" });
-    }
-    res.status(500).json({ msg: "Server error while deleting user." });
+  const { id } = req.params;
+  if (!isValidId(id)) return res.status(400).json({ msg: "Invalid User ID format" });
+  if (id === req.userId) {
+    return res.status(400).json({ msg: "You cannot delete your own admin account." });
   }
+
+  const user = await User.findById(id);
+  if (!user) return res.status(404).json({ msg: "User not found" });
+
+  // Remove the account plus anything that would be orphaned by it.
+  const children = await User.find({ parentId: id }).select("_id").lean();
+  const allIds = [user._id, ...children.map((c) => c._id)];
+
+  await Promise.all([
+    Progress.deleteMany({ user: { $in: allIds } }),
+    Timetable.deleteMany({ user: { $in: allIds } }),
+    User.deleteMany({ _id: { $in: allIds } }),
+  ]);
+
+  res.status(200).json({
+    msg:
+      children.length > 0
+        ? `User account and ${children.length} linked child profile(s) deleted successfully`
+        : "User account deleted successfully",
+  });
 };

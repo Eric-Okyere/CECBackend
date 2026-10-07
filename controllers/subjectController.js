@@ -3,6 +3,14 @@ import Subject from "../model/Subject.js";
 import SubStrand from "../model/SubStrand.js";
 // controllers/lessonController.js
 import Lesson from "../model/Lesson.js";
+import { exactInsensitive } from "../utils/escapeRegex.js";
+
+// Lesson.subject is an ObjectId, so a subject *name* from the URL is resolved to ids
+// first (a raw regex against an ObjectId field throws a CastError).
+const subjectIdsByName = async (name) =>
+  mongoose.Types.ObjectId.isValid(name)
+    ? [name]
+    : (await Subject.find({ name: exactInsensitive(name) }).select("_id").lean()).map((s) => s._id);
 
 // Helper for standard Subject population across endpoints
 const populateSubjectStrands = (query) => {
@@ -114,10 +122,10 @@ export const getLessonsGroupedBySubstrand = async (req, res) => {
 
     const query = {};
     if (subject) {
-      query.subject = { $regex: new RegExp(`^${subject.trim()}$`, "i") };
+      query.subject = { $in: await subjectIdsByName(subject) };
     }
     if (level) {
-      query.level = { $regex: new RegExp(`^${level.trim()}$`, "i") };
+      query.level = exactInsensitive(level);
     }
 
     // 1. Fetch lessons and populate SubStrand
@@ -131,7 +139,7 @@ export const getLessonsGroupedBySubstrand = async (req, res) => {
     // 2. Fetch Subjects to build lookup maps for both Strands and SubStrands
     const subjectQuery = {};
     if (subject) {
-      subjectQuery.name = { $regex: new RegExp(`^${subject.trim()}$`, "i") };
+      subjectQuery.name = exactInsensitive(subject);
     }
     const subjects = await Subject.find(subjectQuery);
 
@@ -222,20 +230,17 @@ export const getLessonsForSingleSubstrand = async (req, res) => {
     const query = {};
 
     if (subject) {
-      query.subject = { $regex: new RegExp(`^${subject.trim()}$`, "i") };
+      query.subject = { $in: await subjectIdsByName(subject) };
     }
     if (level) {
-      query.level = { $regex: new RegExp(`^${level.trim()}$`, "i") };
+      query.level = exactInsensitive(level);
     }
 
-    // Escape special characters in sub-strand regex
-    const safeSubStrand = subStrandName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
-
-    // Search both string field and populated ObjectId field
-    query.$or = [
-      { subStrand: { $regex: new RegExp(`^${safeSubStrand.trim()}$`, "i") } },
-      { subStrand: subStrandName }
-    ];
+    // Lesson.subStrand is an ObjectId: accept an id, or resolve a title to ids.
+    const subStrandIds = mongoose.Types.ObjectId.isValid(subStrandName)
+      ? [subStrandName]
+      : (await SubStrand.find({ title: exactInsensitive(subStrandName) }).select("_id").lean()).map((d) => d._id);
+    query.subStrand = { $in: subStrandIds };
 
     const lessons = await Lesson.find(query)
       .select("lessonNumber lessonName videos quiz level subject subStrand")
@@ -310,9 +315,13 @@ export const getLessonsBySubStrand = async (req, res) => {
     const { subject, level, subStrand } = req.query;
 
     const query = {};
-    if (subject) query.subject = { $regex: new RegExp(`^${subject.trim()}$`, "i") };
-    if (level) query.level = { $regex: new RegExp(`^${level.trim()}$`, "i") };
-    if (subStrand) query.subStrand = { $regex: new RegExp(`^${subStrand.trim()}$`, "i") };
+    if (subject) query.subject = { $in: await subjectIdsByName(subject) };
+    if (level) query.level = exactInsensitive(level);
+    if (subStrand) {
+      query.subStrand = mongoose.Types.ObjectId.isValid(subStrand)
+        ? subStrand
+        : { $in: (await SubStrand.find({ title: exactInsensitive(subStrand) }).select("_id").lean()).map((d) => d._id) };
+    }
 
     const lessons = await Lesson.find(query).sort({ lessonNumber: 1 });
 

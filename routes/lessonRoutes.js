@@ -1,50 +1,25 @@
 import express from "express";
-import upload from "../middleware/upload.js"; // Ensure this matches your file name
-import { 
-  createLesson, 
-  getLessons, 
-  getLessonById, 
-  updateLesson, 
+import upload from "../middleware/upload.js";
+import { protect, adminOnly } from "../middleware/authMiddleware.js";
+import {
+  createLesson,
+  getLessons,
+  getLessonById,
+  updateLesson,
   deleteLesson,
-  deleteVideoFromLesson, // Adding this for granular control
+  deleteVideoFromLesson,
 } from "../controllers/lessonController.js";
 
 const router = express.Router();
 
-/**
- * @route   GET /api/lessons
- * @desc    
- */
-router.get("/", getLessons);
-
-/**
- * @route   GET /api/lessons/:id
- * @desc    Get a single lesson's full details
- */
+// Public: learners browse lessons.
+router.get("/", getLessons); // optional ?subject=<name|id>&level=
 router.get("/:id", getLessonById);
 
-/**
- * @route   POST /api/lessons
- * @desc    Create a new lesson with multiple videos (max5)
- */
-router.post("/", upload.array("videos", 5), createLesson);
-
-/**
- * @route   PUT /api/lessons/:id
- * @desc    Update text/quiz and APPEND new videos to the array
- */
-router.put("/:id", upload.array("videos", 5), updateLesson);
-
-/**
- * @route   DELETE /api/lessons/:id
- * @desc    Delete entire lesson and all associated Cloudinary files
- */
-router.delete("/:id", deleteLesson);
-
-/**
- * @route   DELETE /api/lessons/:id/videos/:videoId
- * @desc    Delete a SPECIFIC video from the array and Cloudinary
- */
-router.delete("/:id/videos/:videoId", deleteVideoFromLesson);
+// Admin only: content management.
+router.post("/", protect, adminOnly, upload.array("videos", 5), createLesson);
+router.put("/:id", protect, adminOnly, upload.array("videos", 5), updateLesson);
+router.delete("/:id", protect, adminOnly, deleteLesson);
+router.delete("/:id/videos/:videoId", protect, adminOnly, deleteVideoFromLesson);
 
 export default router;
