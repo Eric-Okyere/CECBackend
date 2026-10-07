@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { OAuth2Client } from "google-auth-library";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { sendVerificationEmail } from "../services/emailService.js";
+import { sendVerificationEmail, sendPasswordResetEmail } from "../services/emailService.js";
 import { canActForUser } from "../middleware/authMiddleware.js";
 import User from "../model/User.js";
 import Progress from "../model/Progress.js";
@@ -166,7 +166,7 @@ export const register = async (req, res) => {
   let user = await findByEmail(email);
 
   if (user && user.isVerified) {
-    return res.status(400).json({ msg: "Email already registered. Please log in." });
+    return res.status(400).json({ msg: "This email already has an account. Log in, or use \"Forgot password\" to set a password." });
   }
 
   if (user) {
@@ -267,6 +267,87 @@ export const resendVerification = async (req, res) => {
     return res.status(502).json({ msg: "We couldn't send the email right now. Try again shortly." });
   }
   res.json(generic);
+};
+
+// --- Password reset ----------------------------------------------------------
+
+export const forgotPassword = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const generic = { msg: "If an account exists for that email, we have sent a reset code." };
+
+  if (!email || !EMAIL_RE.test(email)) {
+    return res.status(400).json({ msg: "Please enter a valid email address." });
+  }
+
+  const user = await findByEmail(email, "+resetSentAt");
+  // Same reply whether or not the account exists, so emails can't be probed.
+  if (!user || user.role === "child") return res.json(generic);
+
+  const lastSent = user.resetSentAt?.getTime() || 0;
+  const wait = Math.ceil((lastSent + RESEND_COOLDOWN_MS - Date.now()) / 1000);
+  if (wait > 0) {
+    return res.status(429).json({ msg: `Please wait ${wait}s before requesting another code.` });
+  }
+
+  const code = crypto.randomInt(100000, 1000000).toString();
+  user.resetCode = hashCode(code);
+  user.resetExpires = new Date(Date.now() + CODE_TTL_MS);
+  user.resetAttempts = 0;
+  user.resetSentAt = new Date();
+  await user.save();
+
+  try {
+    await sendPasswordResetEmail(user.email, code);
+  } catch (mailError) {
+    console.error("Password reset email failed:", mailError.message);
+    return res.status(502).json({ msg: "We couldn't send the email right now. Try again shortly." });
+  }
+  res.json(generic);
+};
+
+export const resetPassword = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const code = String(req.body?.code || "").trim();
+  const { password } = req.body || {};
+
+  if (!email || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ msg: "Enter your email and the 6-digit code." });
+  }
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
+    return res
+      .status(400)
+      .json({ msg: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+  }
+
+  const user = await findByEmail(email, "+resetCode +resetExpires +resetAttempts");
+  const invalid = () => res.status(400).json({ msg: "Invalid or expired reset code." });
+
+  if (!user || !user.resetCode || !user.resetExpires) return invalid();
+  if (user.resetExpires.getTime() < Date.now()) {
+    return res.status(400).json({ msg: "Code has expired. Please request a new one." });
+  }
+  if ((user.resetAttempts || 0) >= MAX_CODE_ATTEMPTS) {
+    return res.status(429).json({ msg: "Too many wrong attempts. Please request a new code." });
+  }
+
+  const expected = Buffer.from(user.resetCode, "hex");
+  const actual = Buffer.from(hashCode(code), "hex");
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    user.resetAttempts = (user.resetAttempts || 0) + 1;
+    await user.save();
+    return invalid();
+  }
+
+  user.password = await bcrypt.hash(password, 10);
+  user.passwordChangedAt = new Date();
+  user.resetCode = undefined;
+  user.resetExpires = undefined;
+  user.resetAttempts = 0;
+  // The code proved they own this inbox, so the email counts as verified too.
+  user.isVerified = true;
+  await user.save();
+
+  res.json({ msg: "Password changed. You can now log in with your new password." });
 };
 
 export const login = async (req, res) => {

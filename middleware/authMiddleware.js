@@ -33,10 +33,16 @@ export const protect = async (req, res, next) => {
     return res.status(401).json({ msg: "Invalid session. Please log in again." });
   }
 
-  const user = await User.findById(decoded.id).select("-password").lean();
+  const user = await User.findById(decoded.id).select("-password +passwordChangedAt").lean();
   if (!user) {
     return res.status(401).json({ msg: "This account no longer exists." });
   }
+
+  // A password reset signs out every session that was opened before it.
+  if (user.passwordChangedAt && decoded.iat * 1000 < new Date(user.passwordChangedAt).getTime() - 1000) {
+    return res.status(401).json({ msg: "Your password was changed. Please log in again." });
+  }
+  delete user.passwordChangedAt;
 
   req.user = user;
   req.userId = String(user._id);

@@ -4,6 +4,8 @@ import {
   login,
   verifyEmail,
   resendVerification,
+  forgotPassword,
+  resetPassword,
   googleLogin,
   updateProfile,
   getAllUsers,
@@ -27,6 +29,8 @@ router.post("/login", authLimiter, login);
 router.post("/google-login", authLimiter, googleLogin);
 router.post("/verify-email", authLimiter, verifyEmail);
 router.post("/resend-verification", authLimiter, resendVerification);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/reset-password", authLimiter, resetPassword);
 
 // --- Logged-in users (self, or a parent acting for their child) ---
 router.get("/user/:id", protect, requireSelfParentOrAdmin("id"), getUserById);

@@ -71,6 +71,15 @@ const userSchema = new mongoose.Schema(
     verificationExpires: { type: Date, select: false },
     verificationAttempts: { type: Number, default: 0, select: false },
     verificationSentAt: { type: Date, select: false },
+
+    // Password reset (code stored as a SHA-256 hash).
+    resetCode: { type: String, select: false },
+    resetExpires: { type: Date, select: false },
+    resetAttempts: { type: Number, default: 0, select: false },
+    resetSentAt: { type: Date, select: false },
+
+    // Tokens issued before this moment are rejected (set when the password changes).
+    passwordChangedAt: { type: Date, select: false },
   },
   { timestamps: true }
 );
@@ -82,6 +91,11 @@ const SECRET_FIELDS = [
   "verificationExpires",
   "verificationAttempts",
   "verificationSentAt",
+  "resetCode",
+  "resetExpires",
+  "resetAttempts",
+  "resetSentAt",
+  "passwordChangedAt",
 ];
 const stripSecrets = (doc, ret) => {
   SECRET_FIELDS.forEach((f) => delete ret[f]);
